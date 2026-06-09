@@ -87,6 +87,31 @@ class CriterionScore(BaseModel):
     justification: str | None = None
 
 
+class FeedbackItem(BaseModel):
+    """One actionable critique, tied to the deterministic criterion that triggered it."""
+
+    criterion: str
+    problem: str = Field(description="What is wrong with the response.")
+    suggestion: str = Field(description="A concrete, actionable instruction to fix it.")
+
+
+class Feedback(BaseModel):
+    """Structured critique derived from an EvalResult, plus a rendered prompt string.
+
+    ``items`` carries the structured critique (persisted in the revise trace);
+    ``text`` is the rendered form handed to the revision prompt. When ``items``
+    is empty the response needs no changes and the loop carries v1 forward.
+    """
+
+    items: list[FeedbackItem] = Field(default_factory=list)
+    text: str = Field(default="", description="Rendered feedback for the revision prompt.")
+
+    @property
+    def is_actionable(self) -> bool:
+        """True when there is at least one concrete change to make."""
+        return bool(self.items)
+
+
 class EvalResult(BaseModel):
     """The structured score for one response (deterministic + optional judge)."""
 

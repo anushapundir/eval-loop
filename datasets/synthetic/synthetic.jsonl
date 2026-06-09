@@ -1,0 +1,100 @@
+{"prompt": "What is retrieval-augmented generation?", "source": "synthetic"}
+{"prompt": "What is grounding in a RAG system?", "source": "synthetic"}
+{"prompt": "What is when to use RAG?", "source": "synthetic"}
+{"prompt": "What is keyword-based retrieval?", "source": "synthetic"}
+{"prompt": "What is embedding-based retrieval?", "source": "synthetic"}
+{"prompt": "What is the LLM-as-a-judge approach?", "source": "synthetic"}
+{"prompt": "What is position bias in LLM judges?", "source": "synthetic"}
+{"prompt": "What is length bias in LLM judges?", "source": "synthetic"}
+{"prompt": "What is validating an LLM judge against a golden set?", "source": "synthetic"}
+{"prompt": "What is rubric design for judging?", "source": "synthetic"}
+{"prompt": "What is controlling the cost of LLM judging?", "source": "synthetic"}
+{"prompt": "What is deterministic evaluation checks?", "source": "synthetic"}
+{"prompt": "What is criteria-based evaluation?", "source": "synthetic"}
+{"prompt": "What is per-criterion scoring?", "source": "synthetic"}
+{"prompt": "What is the pass rate metric?", "source": "synthetic"}
+{"prompt": "What is the improvement delta?", "source": "synthetic"}
+{"prompt": "What is sample-size honesty in evaluation?", "source": "synthetic"}
+{"prompt": "What is the critique-and-revise loop?", "source": "synthetic"}
+{"prompt": "What is self-refinement (Reflexion)?", "source": "synthetic"}
+{"prompt": "What is stop criteria for feedback loops?", "source": "synthetic"}
+{"prompt": "What is avoiding overfitting in feedback loops?", "source": "synthetic"}
+{"prompt": "What is the agent loop?", "source": "synthetic"}
+{"prompt": "What is tool use in agents?", "source": "synthetic"}
+{"prompt": "What is agent state?", "source": "synthetic"}
+{"prompt": "What is orchestration graphs?", "source": "synthetic"}
+{"prompt": "What is observability and tracing in agents?", "source": "synthetic"}
+{"prompt": "Explain retrieval-augmented generation in simple terms.", "source": "synthetic"}
+{"prompt": "Explain grounding in a RAG system in simple terms.", "source": "synthetic"}
+{"prompt": "Explain when to use RAG in simple terms.", "source": "synthetic"}
+{"prompt": "Explain keyword-based retrieval in simple terms.", "source": "synthetic"}
+{"prompt": "Explain embedding-based retrieval in simple terms.", "source": "synthetic"}
+{"prompt": "Explain the LLM-as-a-judge approach in simple terms.", "source": "synthetic"}
+{"prompt": "Explain position bias in LLM judges in simple terms.", "source": "synthetic"}
+{"prompt": "Explain length bias in LLM judges in simple terms.", "source": "synthetic"}
+{"prompt": "Explain validating an LLM judge against a golden set in simple terms.", "source": "synthetic"}
+{"prompt": "Explain rubric design for judging in simple terms.", "source": "synthetic"}
+{"prompt": "Explain controlling the cost of LLM judging in simple terms.", "source": "synthetic"}
+{"prompt": "Explain deterministic evaluation checks in simple terms.", "source": "synthetic"}
+{"prompt": "Explain criteria-based evaluation in simple terms.", "source": "synthetic"}
+{"prompt": "Explain per-criterion scoring in simple terms.", "source": "synthetic"}
+{"prompt": "Explain the pass rate metric in simple terms.", "source": "synthetic"}
+{"prompt": "Explain the improvement delta in simple terms.", "source": "synthetic"}
+{"prompt": "Explain sample-size honesty in evaluation in simple terms.", "source": "synthetic"}
+{"prompt": "Explain the critique-and-revise loop in simple terms.", "source": "synthetic"}
+{"prompt": "Explain self-refinement (Reflexion) in simple terms.", "source": "synthetic"}
+{"prompt": "Explain stop criteria for feedback loops in simple terms.", "source": "synthetic"}
+{"prompt": "Explain avoiding overfitting in feedback loops in simple terms.", "source": "synthetic"}
+{"prompt": "Explain the agent loop in simple terms.", "source": "synthetic"}
+{"prompt": "Explain tool use in agents in simple terms.", "source": "synthetic"}
+{"prompt": "Explain agent state in simple terms.", "source": "synthetic"}
+{"prompt": "Explain orchestration graphs in simple terms.", "source": "synthetic"}
+{"prompt": "Explain observability and tracing in agents in simple terms.", "source": "synthetic"}
+{"prompt": "Briefly, how does retrieval-augmented generation work?", "source": "synthetic"}
+{"prompt": "Briefly, how does grounding in a RAG system work?", "source": "synthetic"}
+{"prompt": "Briefly, how does when to use RAG work?", "source": "synthetic"}
+{"prompt": "Briefly, how does keyword-based retrieval work?", "source": "synthetic"}
+{"prompt": "Briefly, how does embedding-based retrieval work?", "source": "synthetic"}
+{"prompt": "Briefly, how does the LLM-as-a-judge approach work?", "source": "synthetic"}
+{"prompt": "Briefly, how does position bias in LLM judges work?", "source": "synthetic"}
+{"prompt": "Briefly, how does length bias in LLM judges work?", "source": "synthetic"}
+{"prompt": "Briefly, how does validating an LLM judge against a golden set work?", "source": "synthetic"}
+{"prompt": "Briefly, how does rubric design for judging work?", "source": "synthetic"}
+{"prompt": "Briefly, how does controlling the cost of LLM judging work?", "source": "synthetic"}
+{"prompt": "Briefly, how does deterministic evaluation checks work?", "source": "synthetic"}
+{"prompt": "Briefly, how does criteria-based evaluation work?", "source": "synthetic"}
+{"prompt": "Briefly, how does per-criterion scoring work?", "source": "synthetic"}
+{"prompt": "Briefly, how does the pass rate metric work?", "source": "synthetic"}
+{"prompt": "Briefly, how does the improvement delta work?", "source": "synthetic"}
+{"prompt": "Briefly, how does sample-size honesty in evaluation work?", "source": "synthetic"}
+{"prompt": "Briefly, how does the critique-and-revise loop work?", "source": "synthetic"}
+{"prompt": "Briefly, how does self-refinement (Reflexion) work?", "source": "synthetic"}
+{"prompt": "Briefly, how does stop criteria for feedback loops work?", "source": "synthetic"}
+{"prompt": "Briefly, how does avoiding overfitting in feedback loops work?", "source": "synthetic"}
+{"prompt": "Briefly, how does the agent loop work?", "source": "synthetic"}
+{"prompt": "Briefly, how does tool use in agents work?", "source": "synthetic"}
+{"prompt": "Briefly, how does agent state work?", "source": "synthetic"}
+{"prompt": "Briefly, how does orchestration graphs work?", "source": "synthetic"}
+{"prompt": "Briefly, how does observability and tracing in agents work?", "source": "synthetic"}
+{"prompt": "In detail, explain retrieval-augmented generation and why it matters.", "source": "synthetic"}
+{"prompt": "In detail, explain grounding in a RAG system and why it matters.", "source": "synthetic"}
+{"prompt": "In detail, explain when to use RAG and why it matters.", "source": "synthetic"}
+{"prompt": "In detail, explain keyword-based retrieval and why it matters.", "source": "synthetic"}
+{"prompt": "In detail, explain embedding-based retrieval and why it matters.", "source": "synthetic"}
+{"prompt": "In detail, explain the LLM-as-a-judge approach and why it matters.", "source": "synthetic"}
+{"prompt": "In detail, explain position bias in LLM judges and why it matters.", "source": "synthetic"}
+{"prompt": "In detail, explain length bias in LLM judges and why it matters.", "source": "synthetic"}
+{"prompt": "In detail, explain validating an LLM judge against a golden set and why it matters.", "source": "synthetic"}
+{"prompt": "In detail, explain rubric design for judging and why it matters.", "source": "synthetic"}
+{"prompt": "In detail, explain controlling the cost of LLM judging and why it matters.", "source": "synthetic"}
+{"prompt": "In detail, explain deterministic evaluation checks and why it matters.", "source": "synthetic"}
+{"prompt": "In detail, explain criteria-based evaluation and why it matters.", "source": "synthetic"}
+{"prompt": "In detail, explain per-criterion scoring and why it matters.", "source": "synthetic"}
+{"prompt": "In detail, explain the pass rate metric and why it matters.", "source": "synthetic"}
+{"prompt": "In detail, explain the improvement delta and why it matters.", "source": "synthetic"}
+{"prompt": "In detail, explain sample-size honesty in evaluation and why it matters.", "source": "synthetic"}
+{"prompt": "In detail, explain the critique-and-revise loop and why it matters.", "source": "synthetic"}
+{"prompt": "In detail, explain self-refinement (Reflexion) and why it matters.", "source": "synthetic"}
+{"prompt": "In detail, explain stop criteria for feedback loops and why it matters.", "source": "synthetic"}
+{"prompt": "In detail, explain avoiding overfitting in feedback loops and why it matters.", "source": "synthetic"}
+{"prompt": "In detail, explain the agent loop and why it matters.", "source": "synthetic"}

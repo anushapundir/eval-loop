@@ -44,8 +44,12 @@ class RetrievalResult:
     context: str  # chunk texts concatenated for prompt injection
 
 
-def _tokenize(text: str) -> set[str]:
-    """Lowercase, split into word tokens, and drop stopwords."""
+def tokenize(text: str) -> set[str]:
+    """Lowercase, split into word tokens, and drop stopwords.
+
+    Public so the deterministic evaluators (grounding/coverage) score against
+    the exact same tokenization the retriever uses — one tokenizer, no drift.
+    """
     return {t for t in _TOKEN_RE.findall(text.lower()) if t not in _STOPWORDS}
 
 
@@ -102,11 +106,11 @@ def retrieve(query: str, chunks: list[KbChunk], k: int = 3) -> RetrievalResult:
     the agent can honestly say it lacks the context. Ties break by ``doc_id``
     then ``title`` for deterministic ordering.
     """
-    query_tokens = _tokenize(query)
+    query_tokens = tokenize(query)
 
     scored: list[tuple[int, KbChunk]] = []
     for chunk in chunks:
-        overlap = len(query_tokens & _tokenize(chunk.text))
+        overlap = len(query_tokens & tokenize(chunk.text))
         if overlap > 0:
             scored.append((overlap, chunk))
 

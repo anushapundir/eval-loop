@@ -13,7 +13,29 @@ from agents.llm import Completion
 from agents.prompts import GENERATION_PROMPT_VERSION, build_generation_prompt
 from agents.state import AgentState
 from agents.tools import KbChunk, load_kb, retrieve
+from feedback import improve as improve_module
 from storage.models import Task
+
+
+def _patch_models(monkeypatch, *, context: str, v1_text: str, v2_text: str) -> None:
+    """Make the graph offline: fixed retrieval context, scripted v1 and v2 text."""
+    monkeypatch.setattr(
+        graph_module, "load_kb", lambda _dir: [KbChunk(doc_id="kb", title="T", text=context)]
+    )
+    monkeypatch.setattr(
+        graph_module,
+        "generate",
+        lambda prompt, system=None, **kw: Completion(
+            text=v1_text, provider="ollama", model="test", latency_ms=1.0
+        ),
+    )
+    monkeypatch.setattr(
+        improve_module,
+        "generate",
+        lambda prompt, system=None, **kw: Completion(
+            text=v2_text, provider="ollama", model="test", latency_ms=1.0
+        ),
+    )
 
 
 def _write(tmp_path: Path, name: str, text: str) -> None:
@@ -71,25 +93,81 @@ def test_build_generation_prompt_includes_context_and_question() -> None:
     assert GENERATION_PROMPT_VERSION == "v1"
 
 
-def test_graph_runs_retrieve_then_generate(monkeypatch) -> None:
-    """The graph retrieves, then generates a grounded v1, emitting both traces."""
-    fake_chunks = [
-        KbChunk(doc_id="llm-as-judge", title="What it is", text="llm as judge scores responses"),
-    ]
-    monkeypatch.setattr(graph_module, "load_kb", lambda _dir: fake_chunks)
+def test_graph_loop_revises_when_v1_fails(monkeypatch) -> None:
+    """A weak v1 (low grounding + coverage) triggers feedback → revise → v2."""
+    _patch_models(
+        monkeypatch,
+        context="alpha beta gamma delta",
+        v1_text="completely unrelated words here padding the length enough",
+        v2_text="alpha beta gamma delta is the grounded improved answer",
+    )
+    task = Task(prompt="explain alpha", key_points=["alpha", "beta"])
+
+    compiled = graph_module.build_graph()
+    state = AgentState(**compiled.invoke(AgentState(task=task)))
+
+    assert state.v1 is not None and state.v2 is not None
+    assert state.v1.text != state.v2.text
+    assert state.v2.text == "alpha beta gamma delta is the grounded improved answer"
+    assert state.v2.version.value == "v2"
+    assert state.v1_eval is not None and state.v2_eval is not None
+    assert state.feedback  # non-empty actionable feedback
+    steps = [t.step for t in state.traces]
+    assert steps[:2] == ["retrieve", "generate"]
+    assert "feedback" in steps and "revise" in steps
+    assert "carry_forward" not in steps
+
+
+def test_graph_carries_forward_when_v1_passes(monkeypatch) -> None:
+    """A strong v1 short-circuits: no revise call, v2 carries v1 forward."""
+    revise_called = {"n": 0}
+
+    def fake_revise_generate(prompt, system=None, **kw):
+        revise_called["n"] += 1
+        return Completion(text="SHOULD NOT BE CALLED", provider="ollama", model="t", latency_ms=1.0)
+
+    monkeypatch.setattr(
+        graph_module,
+        "load_kb",
+        lambda _dir: [KbChunk(doc_id="kb", title="T", text="alpha beta gamma delta epsilon")],
+    )
     monkeypatch.setattr(
         graph_module,
         "generate",
         lambda prompt, system=None, **kw: Completion(
-            text="A grounded answer.", provider="ollama", model="test", latency_ms=1.0
+            text="alpha beta gamma delta epsilon answer here",
+            provider="ollama", model="test", latency_ms=1.0,
         ),
     )
+    monkeypatch.setattr(improve_module, "generate", fake_revise_generate)
+
+    task = Task(prompt="explain alpha", key_points=[])
+    compiled = graph_module.build_graph()
+    state = AgentState(**compiled.invoke(AgentState(task=task)))
+
+    assert revise_called["n"] == 0  # revision never ran
+    assert state.v2 is not None
+    assert state.v2.text == state.v1.text
+    assert state.v2.version.value == "v2"
+    steps = [t.step for t in state.traces]
+    assert "carry_forward" in steps
+    assert "revise" not in steps
+
+
+def test_graph_respects_max_iterations_zero(monkeypatch) -> None:
+    """With max_iterations=0 the loop never revises, even when v1 fails."""
+    _patch_models(
+        monkeypatch,
+        context="alpha beta gamma delta",
+        v1_text="completely unrelated words here padding the length enough",
+        v2_text="should not be produced",
+    )
+    task = Task(prompt="explain alpha", key_points=["alpha", "beta"])
 
     compiled = graph_module.build_graph()
-    result = compiled.invoke(AgentState(task=Task(prompt="what is llm as judge")))
-    state = AgentState(**result)
+    state = AgentState(**compiled.invoke(AgentState(task=task, max_iterations=0)))
 
-    assert state.v1 is not None
-    assert state.v1.text == "A grounded answer."
-    assert state.v1.retrieved_doc_ids == ["llm-as-judge"]
-    assert [t.step for t in state.traces] == ["retrieve", "generate"]
+    steps = [t.step for t in state.traces]
+    assert "revise" not in steps
+    assert "carry_forward" in steps
+    assert state.v2 is not None and state.v2.text == state.v1.text
