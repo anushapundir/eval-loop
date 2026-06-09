@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# Environment
+.env
+
+# Local data (produced fresh each run). The committed demo db is force-added.
+data/*.db
+!data/demo_results.db
+
+# Reports output (generated). Keep the committed demo set.
+reports/output/*
+!reports/output/.gitkeep
+!reports/output/demo/
+
+# OS / editor
+.DS_Store
+Thumbs.db
