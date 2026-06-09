@@ -46,6 +46,10 @@ class Settings(BaseSettings):
     request_timeout_s: float = Field(default=120.0)
     max_retries: int = Field(default=3)
 
+    # --- Retrieval -------------------------------------------------------
+    # Number of KB chunks the retrieval tool returns as grounding context.
+    retrieval_top_k: int = Field(default=3)
+
     # --- Evaluation knobs ------------------------------------------------
     # Score threshold a response must reach to "pass".
     pass_threshold: float = Field(default=0.7)

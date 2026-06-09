@@ -77,6 +77,9 @@ def cmd_run(prompt: str) -> int:
     )
     db.write_eval_result(eval_result)
 
+    retrieved = state.v1.retrieved_doc_ids
+    print("\n=== Retrieved context ===")
+    print(f"  docs: {', '.join(retrieved) if retrieved else '(none matched)'}")
     print("\n=== Response (v1) ===")
     print(state.v1.text)
     print("\n=== Deterministic checks ===")
