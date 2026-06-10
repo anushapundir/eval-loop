@@ -41,3 +41,17 @@ def test_parser_wires_validate_judge_subcommand() -> None:
     args = build_parser().parse_args(["validate-judge", "--limit", "5"])
     assert args.command == "validate-judge"
     assert args.limit == 5
+
+
+def test_parser_report_defaults() -> None:
+    args = build_parser().parse_args(["report"])
+    assert args.command == "report"
+    assert args.experiment_id is None  # defaults to the most recent experiment
+    assert args.gate is False  # gating is opt-in
+
+
+def test_parser_wires_report_experiment_and_gate() -> None:
+    args = build_parser().parse_args(["report", "--experiment-id", "abc123", "--gate"])
+    assert args.command == "report"
+    assert args.experiment_id == "abc123"
+    assert args.gate is True

@@ -57,6 +57,9 @@ class Settings(BaseSettings):
     # on the full set; only the judge is sampled to control cost).
     judge_sample_rate: float = Field(default=0.2)
     judge_sample_seed: int = Field(default=42)
+    # Tolerance for the report regression gate: a drop in mean within this band
+    # vs the prior experiment is treated as noise and passes (0.0 = strict).
+    regression_tolerance: float = Field(default=0.0)
 
     # --- Feedback loop ---------------------------------------------------
     max_iterations: int = Field(default=2)

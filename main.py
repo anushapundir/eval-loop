@@ -12,11 +12,15 @@ Day 1 commands:
   the sampled Haiku judge on a subset, persisted as EvalResults + an Experiment.
 * ``python main.py validate-judge [--limit N]`` — validate the judge against the
   golden set via good-vs-bad ranking and print an honest agreement report.
+* ``python main.py report [--experiment-id ID] [--gate]`` — aggregate a stored
+  experiment's results into metrics, write a JSON/CSV summary and four charts to
+  ``reports/output/``, and optionally gate on regression vs the prior run.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 
 from agents.graph import build_graph
@@ -26,10 +30,19 @@ from agents.state import AgentState
 from config.logging import get_logger
 from config.settings import get_settings
 from datasets.loader import load_dataset
+from evaluators.analysis import cluster_failures
 from evaluators.runner import run_dataset, run_improvement
 from evaluators.validate_judge import format_report, validate_judge
+from reports.charts import render_all
+from reports.metrics import (
+    ExperimentSummary,
+    check_regression,
+    compare_versions,
+    per_criterion_means,
+    summarize_experiment,
+)
 from storage import db
-from storage.models import EvalResult, Experiment, Task
+from storage.models import EvalResult, Experiment, ResponseVersion, Task
 
 log = get_logger("main")
 
@@ -240,6 +253,106 @@ def cmd_validate_judge(limit: int) -> int:
     return 0
 
 
+def _fmt(x: float | None) -> str:
+    """Format an optional score for display."""
+    return f"{x:.3f}" if x is not None else "n/a"
+
+
+def cmd_report(experiment_id: str | None, gate: bool) -> int:
+    """Aggregate a stored experiment into metrics + charts, with an optional gate.
+
+    Reads only from SQLite (no model calls), so it is free and reproducible. With
+    no ``--experiment-id`` it reports the newest experiment. ``--gate`` compares
+    this run's headline mean against the prior experiment and exits non-zero on a
+    regression beyond ``settings.regression_tolerance``.
+    """
+    settings = get_settings()
+    settings.ensure_dirs()
+    db.init_db()
+
+    experiments = db.list_experiments()  # newest first
+    if not experiments:
+        log.error("No experiments in %s; run `evals` first.", settings.db_path)
+        return 1
+
+    if experiment_id:
+        focal = next((e for e in experiments if e.id == experiment_id), None)
+        if focal is None:
+            log.error("Experiment %s not found.", experiment_id)
+            return 1
+    else:
+        focal = experiments[0]
+
+    results = db.list_eval_results(focal.id)
+    if not results:
+        log.error("Experiment %s has no eval results to report.", focal.id)
+        return 1
+
+    summary = summarize_experiment(focal, results)
+    comparison = compare_versions(results)
+    v1_results = [r for r in results if r.version is ResponseVersion.V1]
+    failures = cluster_failures(v1_results, settings=settings)
+
+    # Write artifacts: a JSON summary, a per-criterion CSV, and the four charts.
+    out = settings.reports_output_dir
+    summary_path = out / "report_summary.json"
+    summary_path.write_text(
+        json.dumps(
+            {
+                "summary": summary.model_dump(),
+                "comparison": comparison.model_dump(),
+                "failure_modes": failures.model_dump(),
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    csv_path = out / "per_criterion.csv"
+    per_criterion_means(results).to_csv(csv_path)
+    charts = render_all(focal, results, experiments, settings=settings)
+
+    print(f"\n=== Report: {focal.name} (N={focal.n_tasks}) ===")
+    print(f"  experiment   : {focal.id}")
+    print(f"  mean v1      : {_fmt(summary.mean_v1)}")
+    print(f"  mean v2      : {_fmt(summary.mean_v2)}")
+    if summary.improvement_delta is not None:
+        print(f"  delta (v2-v1): {summary.improvement_delta:+.3f}")
+    print(f"  v1 pass rate : {_fmt(summary.v1_pass_rate)}")
+    if summary.v2_pass_rate is not None:
+        print(f"  v2 pass rate : {_fmt(summary.v2_pass_rate)}")
+    print(f"  judged       : {summary.n_judged}/{summary.n_tasks}")
+    if failures.mode_counts:
+        modes = ", ".join(f"{k}={v}" for k, v in failures.mode_counts.items())
+        print(f"  failure modes: {modes} ({failures.n_failed}/{failures.n_total} v1 failed)")
+    print("\n  charts:")
+    for key, path in charts.items():
+        print(f"    {key:<14} {path}")
+    print(f"  summary json : {summary_path}")
+    print(f"  per-criterion: {csv_path}")
+
+    exit_code = _run_gate(focal, summary, experiments, settings) if gate else 0
+    print(f"\nDB: {settings.db_path}")
+    return exit_code
+
+
+def _run_gate(focal, summary: ExperimentSummary, experiments, settings) -> int:
+    """Compare the focal run's headline mean against the prior experiment."""
+    current = summary.mean_v2 if summary.mean_v2 is not None else summary.mean_v1
+    prior = [e for e in experiments if e.created_at < focal.created_at]
+    baseline_exp = max(prior, key=lambda e: e.created_at) if prior else None
+    baseline = None
+    if baseline_exp is not None:
+        baseline = (
+            baseline_exp.mean_v2 if baseline_exp.mean_v2 is not None else baseline_exp.mean_v1
+        )
+    result = check_regression(current, baseline, tolerance=settings.regression_tolerance)
+    print("\n=== Regression gate ===")
+    if baseline_exp is not None:
+        print(f"  baseline     : {baseline_exp.name} ({baseline_exp.id})")
+    print(f"  {result.message}")
+    return 1 if result.regressed else 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the CLI argument parser."""
     parser = argparse.ArgumentParser(prog="eval-loop-agent", description=__doc__)
@@ -271,6 +384,16 @@ def build_parser() -> argparse.ArgumentParser:
     vj_p.add_argument(
         "--limit", type=int, default=8, help="Max golden tasks to probe (controls cost)."
     )
+
+    report_p = sub.add_parser("report", help="Aggregate an experiment into metrics + charts.")
+    report_p.add_argument(
+        "--experiment-id", default=None,
+        help="Experiment to report (defaults to the most recent).",
+    )
+    report_p.add_argument(
+        "--gate", action="store_true",
+        help="Exit non-zero if the run regresses vs the prior experiment.",
+    )
     return parser
 
 
@@ -287,6 +410,8 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "validate-judge":
         return cmd_validate_judge(args.limit)
+    if args.command == "report":
+        return cmd_report(args.experiment_id, args.gate)
     build_parser().print_help()
     return 0
 
