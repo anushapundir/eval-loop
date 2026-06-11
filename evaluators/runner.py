@@ -23,7 +23,7 @@ from config.settings import Settings, get_settings
 from evaluators.checks import run_deterministic_checks
 from evaluators.judge import judge_response
 from storage import db
-from storage.models import AgentResponse, EvalResult, Task
+from storage.models import AgentResponse, CriterionScore, EvalResult, Task
 
 if TYPE_CHECKING:
     from agents.state import AgentState
@@ -145,7 +145,9 @@ def run_dataset(
     return results
 
 
-def _overall_score(deterministic, judge) -> float:
+def _overall_score(
+    deterministic: list[CriterionScore], judge: list[CriterionScore]
+) -> float:
     """Mean of deterministic scores, blended 50/50 with the judge mean if judged."""
     det_mean = sum(s.score for s in deterministic) / len(deterministic)
     if not judge:

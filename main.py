@@ -22,20 +22,23 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
+from typing import TYPE_CHECKING
 
 from agents.graph import build_graph
 from agents.llm import generate
 from agents.prompts import GENERATION_PROMPT_VERSION
 from agents.state import AgentState
 from config.logging import get_logger
-from config.settings import get_settings
+from config.settings import Settings, get_settings
 from datasets.loader import load_dataset
-from evaluators.analysis import cluster_failures
+from evaluators.analysis import FailureAnalysis, cluster_failures
 from evaluators.runner import run_dataset, run_improvement
 from evaluators.validate_judge import format_report, validate_judge
 from reports.charts import render_all
 from reports.metrics import (
     ExperimentSummary,
+    VersionComparison,
     check_regression,
     compare_versions,
     per_criterion_means,
@@ -43,6 +46,9 @@ from reports.metrics import (
 )
 from storage import db
 from storage.models import EvalResult, Experiment, ResponseVersion, Task
+
+if TYPE_CHECKING:
+    from langgraph.graph.state import CompiledStateGraph
 
 log = get_logger("main")
 
@@ -207,7 +213,16 @@ def cmd_evals(
     return 0
 
 
-def _run_loop_eval(dataset, split, tasks, graph, experiment, run_settings, settings, rate) -> int:
+def _run_loop_eval(
+    dataset: str,
+    split: str | None,
+    tasks: list[Task],
+    graph: CompiledStateGraph,
+    experiment: Experiment,
+    run_settings: Settings,
+    settings: Settings,
+    rate: float,
+) -> int:
     """Run the Day 4 critique->revise loop over the dataset and report v1 vs v2."""
 
     def loop_runner(task: Task) -> AgentState:
@@ -288,28 +303,12 @@ def cmd_report(experiment_id: str | None, gate: bool) -> int:
         log.error("Experiment %s has no eval results to report.", focal.id)
         return 1
 
-    summary = summarize_experiment(focal, results)
-    comparison = compare_versions(results)
-    v1_results = [r for r in results if r.version is ResponseVersion.V1]
-    failures = cluster_failures(v1_results, settings=settings)
-
-    # Write artifacts: a JSON summary, a per-criterion CSV, and the four charts.
     out = settings.reports_output_dir
-    summary_path = out / "report_summary.json"
-    summary_path.write_text(
-        json.dumps(
-            {
-                "summary": summary.model_dump(),
-                "comparison": comparison.model_dump(),
-                "failure_modes": failures.model_dump(),
-            },
-            indent=2,
-        ),
-        encoding="utf-8",
+    summary, _comparison, failures, charts = _write_report_artifacts(
+        focal, results, experiments, out, settings
     )
+    summary_path = out / "report_summary.json"
     csv_path = out / "per_criterion.csv"
-    per_criterion_means(results).to_csv(csv_path)
-    charts = render_all(focal, results, experiments, settings=settings)
 
     print(f"\n=== Report: {focal.name} (N={focal.n_tasks}) ===")
     print(f"  experiment   : {focal.id}")
@@ -335,7 +334,12 @@ def cmd_report(experiment_id: str | None, gate: bool) -> int:
     return exit_code
 
 
-def _run_gate(focal, summary: ExperimentSummary, experiments, settings) -> int:
+def _run_gate(
+    focal: Experiment,
+    summary: ExperimentSummary,
+    experiments: list[Experiment],
+    settings: Settings,
+) -> int:
     """Compare the focal run's headline mean against the prior experiment."""
     current = summary.mean_v2 if summary.mean_v2 is not None else summary.mean_v1
     prior = [e for e in experiments if e.created_at < focal.created_at]
@@ -351,6 +355,131 @@ def _run_gate(focal, summary: ExperimentSummary, experiments, settings) -> int:
         print(f"  baseline     : {baseline_exp.name} ({baseline_exp.id})")
     print(f"  {result.message}")
     return 1 if result.regressed else 0
+
+
+def _write_report_artifacts(
+    focal: Experiment,
+    results: list[EvalResult],
+    experiments: list[Experiment],
+    out_dir: Path,
+    settings: Settings,
+) -> tuple[ExperimentSummary, VersionComparison, FailureAnalysis, dict[str, Path]]:
+    """Write the JSON summary, per-criterion CSV, and four charts to ``out_dir``.
+
+    Shared by ``report`` (live DB → reports/output) and ``demo`` (demo DB →
+    reports/output/demo). Returns ``(summary, comparison, failures, charts)``.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    summary = summarize_experiment(focal, results)
+    comparison = compare_versions(results)
+    v1_results = [r for r in results if r.version is ResponseVersion.V1]
+    failures = cluster_failures(v1_results, settings=settings)
+
+    (out_dir / "report_summary.json").write_text(
+        json.dumps(
+            {
+                "summary": summary.model_dump(),
+                "comparison": comparison.model_dump(),
+                "failure_modes": failures.model_dump(),
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    per_criterion_means(results).to_csv(out_dir / "per_criterion.csv")
+    charts = render_all(focal, results, experiments, out_dir=out_dir, settings=settings)
+    return summary, comparison, failures, charts
+
+
+def cmd_demo() -> int:
+    """Build the committed read-only demo: a curated DB + precomputed artifacts.
+
+    Runs two small golden experiments (``dev`` then held-out ``test``) through the
+    full loop on the local free model into a *fresh* ``demo_results.db``, then
+    renders the four charts + JSON/CSV into ``reports/output/demo/``. It is
+    deterministic-only (no paid judge), so it costs $0 (CLAUDE.md §2). The two
+    experiments give the trend chart two points and the explorer two runs to
+    browse. Re-runnable: the DB is rebuilt from scratch each time so the demo
+    always tells one clean story. The artifacts are committed so the deployed
+    Streamlit app serves them with zero live API calls (§6).
+    """
+    settings = get_settings()
+    settings.ensure_dirs()
+    demo_db = settings.demo_db_path
+    demo_db.parent.mkdir(parents=True, exist_ok=True)
+    if demo_db.exists():
+        demo_db.unlink()  # start fresh: the demo tells one clean story.
+    db.init_db(demo_db)
+
+    graph = build_graph()
+    run_settings = settings.model_copy(update={"judge_sample_rate": 0.0})  # free, no judge.
+
+    focal: Experiment | None = None
+    for split in ("dev", "test"):
+        focal = _run_demo_split(split, graph, settings, run_settings, demo_db)
+        if focal is None:
+            return 1
+
+    # Render committed artifacts for the held-out test experiment (the headline).
+    results = db.list_eval_results(focal.id, demo_db)
+    experiments = db.list_experiments(demo_db)
+    demo_out = settings.reports_output_dir / "demo"
+    summary, _comparison, _failures, charts = _write_report_artifacts(
+        focal, results, experiments, demo_out, settings
+    )
+
+    print("\n=== Demo build complete ===")
+    print(f"  demo DB      : {demo_db}")
+    print(f"  artifacts    : {demo_out}")
+    print(f"  focal exp    : {focal.name} ({focal.id})")
+    print(f"  mean v1->v2  : {_fmt(summary.mean_v1)} -> {_fmt(summary.mean_v2)}")
+    if summary.improvement_delta is not None:
+        print(f"  delta        : {summary.improvement_delta:+.3f}")
+    print("  charts       :")
+    for key, path in charts.items():
+        print(f"    {key:<14} {path}")
+    print("\nCommit data/demo_results.db and reports/output/demo/ for the public demo.")
+    return 0
+
+
+def _run_demo_split(
+    split: str,
+    graph: CompiledStateGraph,
+    settings: Settings,
+    run_settings: Settings,
+    demo_db: Path,
+) -> Experiment | None:
+    """Run one golden split through the loop into the demo DB; return its experiment."""
+    tasks = load_dataset(settings.golden_dir / "golden.jsonl", split=split)
+    if not tasks:
+        log.error("No golden tasks for split=%s", split)
+        return None
+
+    def loop_runner(task: Task) -> AgentState:
+        result = graph.invoke(AgentState(task=task, max_iterations=settings.max_iterations))
+        return AgentState(**result)
+
+    experiment = Experiment(
+        name=f"demo-golden-{split}",
+        prompt_version=GENERATION_PROMPT_VERSION,
+        model_provider=settings.model_provider,
+        n_tasks=len(tasks),
+    )
+    imp = run_improvement(
+        tasks, loop_runner, experiment_id=experiment.id,
+        settings=run_settings, db_path=demo_db,
+    )
+    experiment.n_judged = imp.n_judged
+    experiment.mean_v1 = imp.mean_v1
+    experiment.mean_v2 = imp.mean_v2
+    experiment.improvement_delta = imp.improvement_delta
+    experiment.notes = (
+        f"Curated demo loop on golden {split} (N={len(tasks)}), deterministic-only."
+    )
+    db.write_experiment(experiment, demo_db)
+    log.info("Demo split %s: mean_v1=%.3f mean_v2=%.3f (N=%d)",
+             split, imp.mean_v1, imp.mean_v2, len(tasks))
+    return experiment
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -394,6 +523,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--gate", action="store_true",
         help="Exit non-zero if the run regresses vs the prior experiment.",
     )
+
+    sub.add_parser(
+        "demo",
+        help="Build the committed read-only demo DB + artifacts (free, local).",
+    )
     return parser
 
 
@@ -412,6 +546,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_validate_judge(args.limit)
     if args.command == "report":
         return cmd_report(args.experiment_id, args.gate)
+    if args.command == "demo":
+        return cmd_demo()
     build_parser().print_help()
     return 0
 

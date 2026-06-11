@@ -1,0 +1,5 @@
+criterion,v1,v2
+coverage,0.556,0.722
+grounding,0.815,0.795
+length,1.0,1.0
+non_empty,1.0,1.0

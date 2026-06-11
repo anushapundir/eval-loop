@@ -12,6 +12,7 @@ emits a trace.
 from __future__ import annotations
 
 import time
+from typing import TYPE_CHECKING
 
 from langgraph.graph import END, StateGraph
 
@@ -25,6 +26,9 @@ from evaluators.checks import run_deterministic_checks
 from feedback.generator import generate_feedback
 from feedback.improve import revise
 from storage.models import AgentResponse, EvalResult, ResponseVersion, Trace
+
+if TYPE_CHECKING:
+    from langgraph.graph.state import CompiledStateGraph
 
 log = get_logger(__name__)
 
@@ -212,7 +216,7 @@ def carry_forward_node(state: AgentState) -> dict:
     return {"v2": response, "v2_eval": ev, "traces": state.traces + [trace]}
 
 
-def build_graph():
+def build_graph() -> CompiledStateGraph:
     """Compile the Day 4 critique-and-revise graph with a max-iterations stop."""
     builder = StateGraph(AgentState)
     builder.add_node("retrieve", retrieve_node)

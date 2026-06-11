@@ -55,3 +55,8 @@ def test_parser_wires_report_experiment_and_gate() -> None:
     assert args.command == "report"
     assert args.experiment_id == "abc123"
     assert args.gate is True
+
+
+def test_parser_wires_demo_subcommand() -> None:
+    args = build_parser().parse_args(["demo"])
+    assert args.command == "demo"

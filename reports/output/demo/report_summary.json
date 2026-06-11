@@ -1,0 +1,32 @@
+{
+  "summary": {
+    "experiment_id": "8ce3ffd907584488978f477607b0a51f",
+    "name": "demo-golden-test",
+    "n_tasks": 6,
+    "n_judged": 0,
+    "mean_v1": 0.843,
+    "mean_v2": 0.88,
+    "improvement_delta": 0.037,
+    "v1_pass_rate": 0.833,
+    "v2_pass_rate": 1.0
+  },
+  "comparison": {
+    "mean_v1": 0.843,
+    "mean_v2": 0.88,
+    "overall_delta": 0.037,
+    "per_criterion_delta": {
+      "coverage": 0.166,
+      "grounding": -0.02,
+      "length": 0.0,
+      "non_empty": 0.0
+    }
+  },
+  "failure_modes": {
+    "n_total": 6,
+    "n_failed": 1,
+    "mode_counts": {
+      "low_grounding": 1,
+      "missing_coverage": 1
+    }
+  }
+}

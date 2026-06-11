@@ -15,6 +15,7 @@ All calls retry with backoff so one transient failure never crashes a batch.
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
@@ -42,7 +43,7 @@ class LLMError(RuntimeError):
     """Raised when a model call fails after exhausting retries."""
 
 
-def _retry(fn, *, attempts: int, what: str):
+def _retry(fn: Callable[[], Completion], *, attempts: int, what: str) -> Completion:
     """Call ``fn`` with exponential backoff; raise :class:`LLMError` on failure."""
     last_exc: Exception | None = None
     for i in range(attempts):
