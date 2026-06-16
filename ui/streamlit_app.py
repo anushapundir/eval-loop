@@ -2,9 +2,11 @@
 
 Two run modes, one app:
 
-* **Live** (local): the "Run a task" form calls the FastAPI ``/run`` endpoint over
-  HTTP (``httpx``) and renders v1 → feedback → v2 with metrics. Requires the API
-  (``uvicorn app.main:app``) and a local Ollama.
+* **Live** (local): the "Run a task" form streams the pipeline stage-by-stage
+  from the FastAPI ``/run/stream`` SSE endpoint and renders each stage
+  (retrieve → generate → evaluate → feedback → revise → re-evaluate) as it
+  completes, with a model provider toggle (local Ollama / Claude Haiku).
+  Requires ``uvicorn app.main:app`` and a local Ollama (unless Haiku is selected).
 * **Demo** (deployed): set ``EVAL_LOOP_DEMO_MODE=1``. The run form is hidden and
   every read is served from the committed, read-only ``demo_results.db`` plus the
   precomputed charts in ``reports/output/demo/`` — **zero live API calls**, so it
@@ -139,6 +141,7 @@ def _stream_run(settings, prompt: str, provider: str, do_judge: bool) -> None:
     payload = {"prompt": prompt, "provider": provider, "do_judge": do_judge}
     total_latency = 0.0
     paid_calls = 0
+    stream_complete = False
 
     st.subheader("Pipeline (live)")
     try:
@@ -150,7 +153,10 @@ def _stream_run(settings, prompt: str, provider: str, do_judge: bool) -> None:
             for line in resp.iter_lines():
                 if not line or not line.startswith("data: "):
                     continue
-                event = json.loads(line[len("data: "):])
+                raw = line[len("data: "):]
+                if not raw:
+                    continue
+                event = json.loads(raw)
                 kind = event.get("type")
                 if kind == "stage":
                     title, cost = _stage_label(event["step"], event.get("provider"))
@@ -162,9 +168,11 @@ def _stream_run(settings, prompt: str, provider: str, do_judge: bool) -> None:
                                    state="complete", expanded=False):
                         _render_stage_payload(event["step"], event.get("payload", {}))
                 elif kind == "judged":
+                    paid_calls += 2
                     st.caption(f"Judged (Haiku): v1 {event['v1_overall']:.3f} → "
                                f"v2 {event['v2_overall']:.3f}")
                 elif kind == "done":
+                    stream_complete = True
                     st.success(
                         f"Done · delta (v2−v1) {event['improvement_delta']:+.3f} · "
                         f"{'revised' if event['revised'] else 'carried forward unchanged'}"
@@ -174,6 +182,9 @@ def _stream_run(settings, prompt: str, provider: str, do_judge: bool) -> None:
                 elif kind == "error":
                     st.error(event.get("detail", "The run failed."))
                     return
+            if not stream_complete:
+                st.warning("The pipeline stream ended without a final result. The agent "
+                           "may still be running, or the connection was interrupted.")
     except httpx.ConnectError:
         st.error(f"Could not reach the API at {api}. Start it with "
                  "`uvicorn app.main:app --port 8000`.")
