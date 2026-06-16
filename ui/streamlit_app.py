@@ -18,6 +18,7 @@ weights, small N.
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -96,18 +97,105 @@ def _render_run_result(body: dict, threshold: float) -> None:
         st.dataframe(body["traces"], hide_index=True, use_container_width=True)
 
 
+_STAGE_LABELS = {
+    "retrieve": ("🔍 Retrieval · keyword match", "FREE"),
+    "evaluate_v1": ("📊 Deterministic checks", "FREE"),
+    "evaluate_v2": ("📊 Deterministic checks", "FREE"),
+    "feedback": ("🛠 Rule-based critic", "FREE"),
+    "carry_forward": ("➡ Carried forward (v1 passed)", "FREE"),
+}
+
+
+def _stage_label(step: str, provider: str | None) -> tuple[str, str]:
+    """Return (title, cost_chip) for a pipeline stage card."""
+    if step in ("generate", "revise"):
+        if provider == "haiku":
+            return ("✦ Claude Haiku 4.5", "PAID")
+        return ("🦙 Local · qwen2.5:7b", "FREE")
+    return _STAGE_LABELS.get(step, (step, "FREE"))
+
+
+def _render_stage_payload(step: str, payload: dict) -> None:
+    """Render the intermediate output for one stage inside its card."""
+    if step == "retrieve":
+        docs = payload.get("doc_ids") or []
+        st.write("**Retrieved docs:** " + (", ".join(docs) if docs else "(none matched)"))
+    elif step in ("generate", "revise"):
+        st.write(payload.get("text", ""))
+    elif step in ("evaluate_v1", "evaluate_v2", "carry_forward"):
+        scores = payload.get("scores")
+        if scores:
+            st.dataframe(scores, hide_index=True, use_container_width=True)
+        if "overall" in payload:
+            verdict = "PASS" if payload.get("passed") else "FAIL"
+            st.caption(f"overall {payload['overall']:.3f} → {verdict}")
+    elif step == "feedback":
+        st.info(payload.get("text") or "(no feedback)")
+
+
+def _stream_run(settings, prompt: str, provider: str, do_judge: bool) -> None:
+    """Open the SSE stream and render each pipeline stage as it arrives."""
+    api = _api_base()
+    payload = {"prompt": prompt, "provider": provider, "do_judge": do_judge}
+    total_latency = 0.0
+    paid_calls = 0
+
+    st.subheader("Pipeline (live)")
+    try:
+        with httpx.stream("POST", f"{api}/run/stream", json=payload, timeout=300.0) as resp:
+            if resp.status_code != 200:
+                resp.read()
+                st.error(f"API returned {resp.status_code}: {resp.text}")
+                return
+            for line in resp.iter_lines():
+                if not line or not line.startswith("data: "):
+                    continue
+                event = json.loads(line[len("data: "):])
+                kind = event.get("type")
+                if kind == "stage":
+                    title, cost = _stage_label(event["step"], event.get("provider"))
+                    lat = event.get("latency_ms") or 0.0
+                    total_latency += lat
+                    if cost == "PAID":
+                        paid_calls += 1
+                    with st.status(f"{title} · {lat:.0f} ms · {cost}",
+                                   state="complete", expanded=False):
+                        _render_stage_payload(event["step"], event.get("payload", {}))
+                elif kind == "judged":
+                    st.caption(f"Judged (Haiku): v1 {event['v1_overall']:.3f} → "
+                               f"v2 {event['v2_overall']:.3f}")
+                elif kind == "done":
+                    st.success(
+                        f"Done · delta (v2−v1) {event['improvement_delta']:+.3f} · "
+                        f"{'revised' if event['revised'] else 'carried forward unchanged'}"
+                    )
+                    st.caption(f"Total stage latency ≈ {total_latency:.0f} ms · "
+                               f"paid model calls: {paid_calls}")
+                elif kind == "error":
+                    st.error(event.get("detail", "The run failed."))
+                    return
+    except httpx.ConnectError:
+        st.error(f"Could not reach the API at {api}. Start it with "
+                 "`uvicorn app.main:app --port 8000`.")
+    except httpx.HTTPError as exc:
+        st.error(f"Stream failed: {exc}")
+
+
 def _run_section(settings) -> None:
-    """The interactive 'Run a task' form (live mode only) → FastAPI /run."""
+    """The interactive 'Run a task' form (live mode only) → streaming /run/stream."""
     st.subheader("Run the self-improvement loop")
-    st.caption("Submit a task → the agent generates v1, critiques it, and revises to v2.")
+    st.caption("Submit a task → watch the agent retrieve, generate v1, critique, "
+               "and revise to v2 — stage by stage, in real time.")
 
     with st.form("run_form"):
         prompt = st.text_area(
             "Task", placeholder="e.g. What is LLM-as-a-judge and why validate it?", height=120
         )
-        do_judge = st.checkbox(
-            "Also run the Haiku judge (costs API budget)", value=False
+        provider_label = st.selectbox(
+            "Model", ["Local · qwen2.5:7b (free)", "Claude Haiku 4.5 (paid — uses API budget)"]
         )
+        do_judge = st.checkbox("Also run the Haiku judge after the loop (costs API budget)",
+                               value=False)
         submitted = st.form_submit_button("Run", type="primary")
 
     if not submitted:
@@ -116,28 +204,8 @@ def _run_section(settings) -> None:
         st.warning("Please enter a task.")
         return
 
-    api = _api_base()
-    with st.spinner("Running the loop (local model)…"):
-        try:
-            resp = httpx.post(
-                f"{api}/run", json={"prompt": prompt, "do_judge": do_judge}, timeout=300.0
-            )
-        except httpx.ConnectError:
-            st.error(f"Could not reach the API at {api}. Start it with "
-                     "`uvicorn app.main:app --port 8000`.")
-            return
-        except httpx.HTTPError as exc:
-            st.error(f"Request failed: {exc}")
-            return
-
-    if resp.status_code == 503:
-        st.error("The agent runtime is unavailable — is Ollama running (`ollama serve`)?")
-        return
-    if resp.status_code != 200:
-        st.error(f"API returned {resp.status_code}: {resp.text}")
-        return
-
-    _render_run_result(resp.json(), settings.pass_threshold)
+    provider = "haiku" if provider_label.startswith("Claude") else "ollama"
+    _stream_run(settings, prompt, provider, do_judge)
 
 
 def _load_experiments(settings) -> list[Experiment]:
