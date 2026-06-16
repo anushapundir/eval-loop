@@ -65,3 +65,20 @@ def test_revise_uses_default_provider_not_judge(monkeypatch) -> None:
     revise(question="q", context="c", previous_answer="p", feedback="f")
     # revise must not force provider="haiku" (cost rule): it leaves it to settings.
     assert seen["provider"] in (None, "ollama")
+
+
+def test_revise_forwards_explicit_provider(monkeypatch) -> None:
+    """revise() forwards an explicit provider kwarg to the model layer unchanged."""
+    seen: dict[str, object] = {}
+
+    class _Completion:
+        text = "revised"
+        provider = "haiku"
+
+    def _fake_generate(prompt, *, system=None, provider=None, settings=None, **kwargs):
+        seen["provider"] = provider
+        return _Completion()
+
+    monkeypatch.setattr("feedback.improve.generate", _fake_generate)
+    revise(question="q", context="c", previous_answer="a", feedback="f", provider="haiku")
+    assert seen["provider"] == "haiku"

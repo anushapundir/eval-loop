@@ -8,6 +8,8 @@ state.
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from storage.models import AgentResponse, EvalResult, Task, Trace
@@ -29,7 +31,7 @@ class AgentState(BaseModel):
 
     # Optional per-run model override (e.g. "ollama" or "haiku"); None → use the
     # configured default provider. Threaded into the generate/revise model calls.
-    provider: str | None = None
+    provider: Literal["ollama", "haiku"] | None = None
 
     iteration: int = 0
     max_iterations: int = 2

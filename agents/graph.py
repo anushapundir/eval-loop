@@ -156,7 +156,7 @@ def revise_node(state: AgentState) -> dict:
         context=state.context,
         previous_answer=state.v1.text,
         feedback=state.feedback or "",
-        provider=state.provider,
+        provider=chosen_provider,
     )
     latency_ms = (time.perf_counter() - start) * 1000.0
 

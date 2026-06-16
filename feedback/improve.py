@@ -2,9 +2,10 @@
 
 This is the "doer" side of the self-improvement loop: given the prior answer,
 the retrieved context, and structured feedback, it asks the agent model to
-produce an improved v2. It runs on the default (free) provider — never the paid
-judge — so the loop stays cost-safe (CLAUDE.md §2). The revision prompt takes
-only feedback + context, so the golden reference answer can never leak in.
+produce an improved v2. The provider is chosen by the caller and defaults to the
+configured (free) provider; it is the *agent* model, never the evaluation judge,
+so the loop stays cost-safe (CLAUDE.md §2). The revision prompt takes only
+feedback + context, so the golden reference answer can never leak in.
 """
 
 from __future__ import annotations
