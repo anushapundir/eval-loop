@@ -54,51 +54,6 @@ def _explorer_db_path(settings) -> Path:
 # --- rendering helpers ------------------------------------------------------
 
 
-def _render_eval_table(title: str, eval_result: dict) -> None:
-    """Show a response's per-criterion scores (deterministic + judge) as a table."""
-    rows = [
-        {"criterion": s["name"], "score": round(s["score"], 3)}
-        for s in (*eval_result.get("deterministic", []), *eval_result.get("judge", []))
-    ]
-    st.caption(title)
-    if rows:
-        st.dataframe(rows, hide_index=True, use_container_width=True)
-
-
-def _render_run_result(body: dict, threshold: float) -> None:
-    """Render the v1 → feedback → v2 story plus the headline metrics."""
-    v1, v2 = body["v1"], body["v2"]
-    v1_eval, v2_eval = body["v1_eval"], body["v2_eval"]
-
-    m1, m2, m3 = st.columns(3)
-    m1.metric("v1 overall", f"{v1_eval['overall_score']:.3f}")
-    m2.metric("v2 overall", f"{v2_eval['overall_score']:.3f}",
-              delta=f"{body['improvement_delta']:+.3f}")
-    m3.metric("retrieved docs", ", ".join(body["retrieved_doc_ids"]) or "(none)")
-
-    st.caption(f"Pass threshold {threshold} · "
-               f"{'judged (Haiku)' if body['judged'] else 'deterministic checks only'}")
-
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        st.subheader("Response v1")
-        st.write(v1["text"])
-        _render_eval_table("v1 scores", v1_eval)
-    with c2:
-        st.subheader("Feedback")
-        if body["revised"]:
-            st.info(body["feedback"] or "(no feedback)")
-        else:
-            st.success("v1 already passed — carried forward unchanged as v2.")
-    with c3:
-        st.subheader("Response v2")
-        st.write(v2["text"])
-        _render_eval_table("v2 scores", v2_eval)
-
-    with st.expander("Trace timeline"):
-        st.dataframe(body["traces"], hide_index=True, use_container_width=True)
-
-
 _STAGE_LABELS = {
     "retrieve": ("🔍 Retrieval · keyword match", "FREE"),
     "evaluate_v1": ("📊 Deterministic checks", "FREE"),

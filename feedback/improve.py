@@ -10,7 +10,7 @@ feedback + context, so the golden reference answer can never leak in.
 
 from __future__ import annotations
 
-from agents.llm import generate
+from agents.llm import Provider, generate
 from agents.prompts import REVISION_SYSTEM, build_revision_prompt
 from config.settings import Settings
 
@@ -21,7 +21,7 @@ def revise(
     context: str,
     previous_answer: str,
     feedback: str,
-    provider: str | None = None,
+    provider: Provider | None = None,
     settings: Settings | None = None,
 ) -> str:
     """Produce a revised answer (v2) from feedback, grounded in the same context.
