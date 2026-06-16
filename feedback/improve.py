@@ -20,6 +20,7 @@ def revise(
     context: str,
     previous_answer: str,
     feedback: str,
+    provider: str | None = None,
     settings: Settings | None = None,
 ) -> str:
     """Produce a revised answer (v2) from feedback, grounded in the same context.
@@ -29,9 +30,10 @@ def revise(
         context: Retrieved KB context the answer must stay grounded in.
         previous_answer: The v1 response being improved.
         feedback: Rendered reviewer feedback to apply.
-        settings: Injectable settings (defaults to the cached singleton); the
-            provider is left to settings so revision uses the free model, not
-            the judge.
+        provider: Optional model provider override (e.g. "ollama" or "haiku");
+            None falls back to the configured default. Never forced to the paid
+            judge — cost rule §2 is respected by the caller choosing wisely.
+        settings: Injectable settings (defaults to the cached singleton).
 
     Returns:
         The revised response text.
@@ -42,5 +44,7 @@ def revise(
         previous_answer=previous_answer,
         feedback=feedback,
     )
-    completion = generate(prompt, system=REVISION_SYSTEM, settings=settings)
+    completion = generate(
+        prompt, system=REVISION_SYSTEM, provider=provider, settings=settings
+    )
     return completion.text

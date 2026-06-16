@@ -171,3 +171,25 @@ def test_graph_respects_max_iterations_zero(monkeypatch) -> None:
     assert "revise" not in steps
     assert "carry_forward" in steps
     assert state.v2 is not None and state.v2.text == state.v1.text
+
+
+def test_generate_node_passes_provider_to_model(monkeypatch):
+    """generate_node forwards AgentState.provider to the model layer."""
+    from agents import graph as graph_mod
+    from agents.state import AgentState
+    from storage.models import Task
+
+    captured = {}
+
+    class _Completion:
+        text = "answer"
+        provider = "haiku"
+
+    def _fake_generate(prompt, *, system=None, provider=None, **kwargs):
+        captured["provider"] = provider
+        return _Completion()
+
+    monkeypatch.setattr(graph_mod, "generate", _fake_generate)
+    state = AgentState(task=Task(prompt="q", source="user"), context="ctx", provider="haiku")
+    graph_mod.generate_node(state)
+    assert captured["provider"] == "haiku"

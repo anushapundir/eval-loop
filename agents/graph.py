@@ -82,7 +82,7 @@ def generate_node(state: AgentState) -> dict:
     """Produce the initial (v1) response grounded in the retrieved context."""
     start = time.perf_counter()
     prompt = build_generation_prompt(question=state.task.prompt, context=state.context)
-    completion = generate(prompt, system=GENERATION_SYSTEM)
+    completion = generate(prompt, system=GENERATION_SYSTEM, provider=state.provider)
     latency_ms = (time.perf_counter() - start) * 1000.0
 
     response = AgentResponse(
@@ -149,12 +149,14 @@ def feedback_node(state: AgentState) -> dict:
 def revise_node(state: AgentState) -> dict:
     """Produce the revised (v2) response by applying the feedback to v1."""
     settings = get_settings()
+    chosen_provider = state.provider or settings.model_provider
     start = time.perf_counter()
     text = revise(
         question=state.task.prompt,
         context=state.context,
         previous_answer=state.v1.text,
         feedback=state.feedback or "",
+        provider=state.provider,
     )
     latency_ms = (time.perf_counter() - start) * 1000.0
 
@@ -163,18 +165,18 @@ def revise_node(state: AgentState) -> dict:
         version=ResponseVersion.V2,
         text=text,
         retrieved_doc_ids=state.retrieved_doc_ids,
-        model_provider=settings.model_provider,
+        model_provider=chosen_provider,
     )
     trace = Trace(
         task_id=state.task.id,
         step="revise",
         response_id=response.id,
-        provider=settings.model_provider,
+        provider=chosen_provider,
         latency_ms=latency_ms,
         payload={"chars": len(text)},
     )
     log.info("revise: task=%s provider=%s latency=%.0fms chars=%d",
-             state.task.id, settings.model_provider, latency_ms, len(text))
+             state.task.id, chosen_provider, latency_ms, len(text))
     return {"v2": response, "traces": state.traces + [trace]}
 
 

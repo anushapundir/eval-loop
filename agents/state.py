@@ -27,6 +27,10 @@ class AgentState(BaseModel):
     v2_eval: EvalResult | None = None
     feedback: str | None = None
 
+    # Optional per-run model override (e.g. "ollama" or "haiku"); None → use the
+    # configured default provider. Threaded into the generate/revise model calls.
+    provider: str | None = None
+
     iteration: int = 0
     max_iterations: int = 2
 
