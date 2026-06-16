@@ -128,3 +128,156 @@ def test_results_returns_experiment_summaries(monkeypatch) -> None:
     assert summary["mean_v1"] == 0.5
     assert summary["mean_v2"] == 0.9
     assert summary["improvement_delta"] == 0.4
+
+
+# ---------------------------------------------------------------------------
+# POST /run/stream — SSE streaming endpoint
+# ---------------------------------------------------------------------------
+
+import json  # noqa: E402 — kept with tests that need it
+
+from storage.models import Trace  # noqa: E402
+
+
+def _trace(task_id, step, provider="ollama", latency=5.0, **payload):
+    return Trace(task_id=task_id, step=step, provider=provider,
+                 latency_ms=latency, payload=payload)
+
+
+def _revise_updates(task):
+    """Scripted graph.stream() updates for a full revise path (v1 fails → v2)."""
+    from storage.models import AgentResponse, CriterionScore, EvalResult, ResponseVersion
+
+    v1 = AgentResponse(task_id=task.id, version=ResponseVersion.V1, text="weak v1",
+                       retrieved_doc_ids=["rag"])
+    v2 = AgentResponse(task_id=task.id, version=ResponseVersion.V2, text="strong v2",
+                       retrieved_doc_ids=["rag"])
+    v1_eval = EvalResult(task_id=task.id, response_id=v1.id, version=ResponseVersion.V1,
+                         deterministic=[CriterionScore(name="grounding", score=0.5)],
+                         overall_score=0.5, passed=False)
+    v2_eval = EvalResult(task_id=task.id, response_id=v2.id, version=ResponseVersion.V2,
+                         deterministic=[CriterionScore(name="grounding", score=0.9)],
+                         overall_score=0.9, passed=True)
+    return [
+        {"retrieve": {"retrieved_doc_ids": ["rag"], "context": "ctx",
+                      "traces": [_trace(task.id, "retrieve", doc_ids=["rag"], n_chunks=2)]}},
+        {"generate": {"v1": v1, "traces": [_trace(task.id, "generate")]}},
+        {"evaluate_v1": {"v1_eval": v1_eval, "traces": [_trace(task.id, "evaluate")]}},
+        {"feedback": {"feedback": "add grounding", "iteration": 1,
+                      "traces": [_trace(task.id, "feedback")]}},
+        {"revise": {"v2": v2, "traces": [_trace(task.id, "revise")]}},
+        {"evaluate_v2": {"v2_eval": v2_eval, "traces": [_trace(task.id, "evaluate")]}},
+    ]
+
+
+class _FakeStreamGraph:
+    def __init__(self, updates_for):
+        self._updates_for = updates_for
+
+    def stream(self, state, stream_mode=None):
+        yield from self._updates_for(state.task)
+
+
+def _events(resp_text):
+    """Parse SSE 'data: {...}' lines into a list of event dicts."""
+    return [json.loads(line[len("data: "):]) for line in resp_text.splitlines()
+            if line.startswith("data: ")]
+
+
+def test_run_stream_emits_stage_events_in_order(monkeypatch):
+    monkeypatch.setattr(app_main, "build_graph", lambda: _FakeStreamGraph(_revise_updates))
+    _stub_db_writes(monkeypatch)
+
+    client = TestClient(app)
+    resp = client.post("/run/stream", json={"prompt": "What is LLM-as-judge?"})
+    assert resp.status_code == 200
+    events = _events(resp.text)
+
+    steps = [e["step"] for e in events if e["type"] == "stage"]
+    assert steps == ["retrieve", "generate", "evaluate_v1", "feedback", "revise", "evaluate_v2"]
+
+    gen = next(e for e in events if e.get("step") == "generate")
+    assert gen["provider"] == "ollama"
+    assert gen["payload"]["text"] == "weak v1"
+
+    done = events[-1]
+    assert done["type"] == "done"
+    assert done["revised"] is True
+    assert round(done["improvement_delta"], 3) == 0.4
+
+
+def test_run_stream_carry_forward_path(monkeypatch):
+    def _carry_updates(task):
+        from storage.models import AgentResponse, CriterionScore, EvalResult, ResponseVersion
+        v1 = AgentResponse(task_id=task.id, version=ResponseVersion.V1, text="good v1",
+                           retrieved_doc_ids=["rag"])
+        v2 = AgentResponse(task_id=task.id, version=ResponseVersion.V2, text="good v1",
+                           retrieved_doc_ids=["rag"])
+        ev1 = EvalResult(task_id=task.id, response_id=v1.id, version=ResponseVersion.V1,
+                         deterministic=[CriterionScore(name="grounding", score=0.9)],
+                         overall_score=0.9, passed=True)
+        ev2 = EvalResult(task_id=task.id, response_id=v2.id, version=ResponseVersion.V2,
+                         deterministic=[CriterionScore(name="grounding", score=0.9)],
+                         overall_score=0.9, passed=True)
+        return [
+            {"retrieve": {"retrieved_doc_ids": ["rag"], "context": "ctx",
+                          "traces": [_trace(task.id, "retrieve")]}},
+            {"generate": {"v1": v1, "traces": [_trace(task.id, "generate")]}},
+            {"evaluate_v1": {"v1_eval": ev1, "traces": [_trace(task.id, "evaluate")]}},
+            {"carry_forward": {"v2": v2, "v2_eval": ev2,
+                               "traces": [_trace(task.id, "carry_forward")]}},
+        ]
+
+    monkeypatch.setattr(app_main, "build_graph", lambda: _FakeStreamGraph(_carry_updates))
+    _stub_db_writes(monkeypatch)
+
+    client = TestClient(app)
+    resp = client.post("/run/stream", json={"prompt": "q"})
+    events = _events(resp.text)
+    steps = [e["step"] for e in events if e["type"] == "stage"]
+    assert steps == ["retrieve", "generate", "evaluate_v1", "carry_forward"]
+    assert "feedback" not in steps and "revise" not in steps
+    assert events[-1]["type"] == "done"
+    assert events[-1]["revised"] is False
+
+
+def test_run_stream_error_event_when_graph_fails(monkeypatch):
+    class _BrokenStreamGraph:
+        def stream(self, state, stream_mode=None):
+            raise RuntimeError("ollama down")
+            yield  # pragma: no cover - makes this a generator
+
+    monkeypatch.setattr(app_main, "build_graph", lambda: _BrokenStreamGraph())
+    _stub_db_writes(monkeypatch)
+
+    client = TestClient(app)
+    resp = client.post("/run/stream", json={"prompt": "q"})
+    assert resp.status_code == 200
+    events = _events(resp.text)
+    assert any(e["type"] == "error" for e in events)
+
+
+def test_run_stream_judged_event_when_do_judge(monkeypatch):
+    monkeypatch.setattr(app_main, "build_graph", lambda: _FakeStreamGraph(_revise_updates))
+    _stub_db_writes(monkeypatch)
+
+    def _fake_eval(response, task, context, *, do_judge, settings=None, experiment_id=None):
+        from storage.models import CriterionScore, EvalResult
+        score = 0.8 if response.version.value == "v1" else 0.95
+        return EvalResult(task_id=task.id, response_id=response.id, version=response.version,
+                          deterministic=[CriterionScore(name="grounding", score=score)],
+                          judge=[CriterionScore(name="correctness", score=score)],
+                          overall_score=score, passed=True, judged=True)
+
+    monkeypatch.setattr(app_main, "evaluate_response", _fake_eval)
+
+    client = TestClient(app)
+    resp = client.post("/run/stream", json={"prompt": "q", "do_judge": True})
+    events = _events(resp.text)
+    assert any(e["type"] == "judged" for e in events)
+
+
+def test_run_stream_rejects_blank_prompt():
+    client = TestClient(app)
+    resp = client.post("/run/stream", json={"prompt": "   "})
+    assert resp.status_code == 422

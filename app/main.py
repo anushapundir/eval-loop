@@ -21,10 +21,13 @@ and ``reports.metrics``. Nothing here re-implements agent or eval logic.
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 from agents.graph import build_graph
@@ -49,6 +52,10 @@ class RunRequest(BaseModel):
     do_judge: bool = Field(
         default=False,
         description="Also run the sampled Haiku judge on v1/v2 (costs API budget).",
+    )
+    provider: Literal["ollama", "haiku"] | None = Field(
+        default=None,
+        description="Per-run model override; None uses the configured default.",
     )
 
     @field_validator("prompt")
@@ -165,6 +172,107 @@ def run(request: RunRequest) -> RunResponse:
             for t in state.traces
         ],
     )
+
+
+def _sse(event: dict) -> str:
+    """Format one event as a Server-Sent Events 'data:' frame."""
+    return f"data: {json.dumps(event)}\n\n"
+
+
+def _stage_event(node: str, delta: dict) -> dict:
+    """Build the SSE stage event for one finished graph node.
+
+    Reads provider/latency from the newest trace in the node's state delta and
+    the intermediate output from the delta's state keys. Returns a JSON-safe dict.
+    """
+    traces = delta.get("traces") or []
+    trace = traces[-1] if traces else None
+    payload: dict = {}
+    if node == "retrieve":
+        payload = {"doc_ids": delta.get("retrieved_doc_ids") or []}
+    elif node == "generate" and delta.get("v1") is not None:
+        payload = {"text": delta["v1"].text}
+    elif node == "evaluate_v1" and delta.get("v1_eval") is not None:
+        ev = delta["v1_eval"]
+        payload = {"scores": [{"name": s.name, "score": s.score} for s in ev.deterministic],
+                   "overall": ev.overall_score, "passed": ev.passed}
+    elif node == "feedback":
+        payload = {"text": delta.get("feedback") or ""}
+    elif node == "revise" and delta.get("v2") is not None:
+        payload = {"text": delta["v2"].text}
+    elif node in ("evaluate_v2", "carry_forward") and delta.get("v2_eval") is not None:
+        ev = delta["v2_eval"]
+        payload = {"scores": [{"name": s.name, "score": s.score} for s in ev.deterministic],
+                   "overall": ev.overall_score, "passed": ev.passed}
+        if node == "carry_forward":
+            payload["reason"] = "v1 passed or revision budget exhausted"
+    return {
+        "type": "stage",
+        "step": node,
+        "provider": (trace.provider if trace else None),
+        "latency_ms": (trace.latency_ms if trace else None),
+        "payload": payload,
+    }
+
+
+@app.post("/run/stream")
+def run_stream(request: RunRequest) -> StreamingResponse:
+    """Run the loop and stream one SSE event per pipeline stage (real-time view).
+
+    Mirrors ``/run`` but emits progress as it happens via ``graph.stream``. The
+    paid judge still runs only *after* the loop when ``do_judge`` is set
+    (CLAUDE.md §2/§7). Errors are delivered as in-band ``error`` events so the UI
+    shows a clean message rather than a hung stream.
+    """
+    settings = get_settings()
+    task = Task(prompt=request.prompt, source="user")
+
+    def _generate():
+        captured: dict = {}
+        try:
+            db.write_task(task)
+            graph = build_graph()
+            state = AgentState(
+                task=task, max_iterations=settings.max_iterations, provider=request.provider
+            )
+            for update in graph.stream(state, stream_mode="updates"):
+                for node, delta in update.items():
+                    captured.update(delta)
+                    yield _sse(_stage_event(node, delta))
+        except Exception as exc:  # noqa: BLE001 - surface as an in-band error event
+            log.error("Streaming run failed for task %s: %s", task.id, exc)
+            yield _sse({"type": "error",
+                        "detail": "The agent runtime is unavailable (is Ollama running?)."})
+            return
+
+        v1 = captured.get("v1")
+        v2 = captured.get("v2")
+        v1_eval = captured.get("v1_eval")
+        v2_eval = captured.get("v2_eval")
+        context = captured.get("context", "")
+        if v1 is None or v2 is None or v1_eval is None or v2_eval is None:
+            yield _sse({"type": "error", "detail": "Agent produced an incomplete result."})
+            return
+
+        if request.do_judge:
+            v1_eval = evaluate_response(v1, task, context, do_judge=True, settings=settings)
+            v2_eval = evaluate_response(v2, task, context, do_judge=True, settings=settings)
+            yield _sse({"type": "judged",
+                        "v1_overall": v1_eval.overall_score,
+                        "v2_overall": v2_eval.overall_score})
+
+        db.write_response(v1)
+        db.write_response(v2)
+        for trace in captured.get("traces", []):
+            db.write_trace(trace)
+        db.write_eval_result(v1_eval)
+        db.write_eval_result(v2_eval)
+
+        yield _sse({"type": "done",
+                    "revised": v2.text != v1.text,
+                    "improvement_delta": round(v2_eval.overall_score - v1_eval.overall_score, 3)})
+
+    return StreamingResponse(_generate(), media_type="text/event-stream")
 
 
 @app.get("/results", response_model=list[ExperimentSummary])
