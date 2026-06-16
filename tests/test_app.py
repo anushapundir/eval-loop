@@ -9,6 +9,8 @@ payloads, not the agent/eval logic (covered by the runner/graph tests).
 
 from __future__ import annotations
 
+import json
+
 from fastapi.testclient import TestClient
 
 import app.main as app_main
@@ -20,6 +22,7 @@ from storage.models import (
     Experiment,
     ResponseVersion,
     Task,
+    Trace,
 )
 
 
@@ -133,10 +136,6 @@ def test_results_returns_experiment_summaries(monkeypatch) -> None:
 # ---------------------------------------------------------------------------
 # POST /run/stream — SSE streaming endpoint
 # ---------------------------------------------------------------------------
-
-import json  # noqa: E402 — kept with tests that need it
-
-from storage.models import Trace  # noqa: E402
 
 
 def _trace(task_id, step, provider="ollama", latency=5.0, **payload):
@@ -274,7 +273,28 @@ def test_run_stream_judged_event_when_do_judge(monkeypatch):
     client = TestClient(app)
     resp = client.post("/run/stream", json={"prompt": "q", "do_judge": True})
     events = _events(resp.text)
-    assert any(e["type"] == "judged" for e in events)
+    judged = next(e for e in events if e["type"] == "judged")
+    assert judged["v1_overall"] == 0.8
+    assert judged["v2_overall"] == 0.95
+    done = next(e for e in events if e["type"] == "done")
+    assert round(done["improvement_delta"], 3) == 0.15
+
+
+def test_run_stream_error_event_when_judge_fails(monkeypatch):
+    monkeypatch.setattr(app_main, "build_graph", lambda: _FakeStreamGraph(_revise_updates))
+    _stub_db_writes(monkeypatch)
+
+    def _boom(*a, **k):
+        raise RuntimeError("haiku down")
+
+    monkeypatch.setattr(app_main, "evaluate_response", _boom)
+
+    client = TestClient(app)
+    resp = client.post("/run/stream", json={"prompt": "q", "do_judge": True})
+    assert resp.status_code == 200
+    events = _events(resp.text)
+    assert any(e["type"] == "error" for e in events)
+    assert not any(e["type"] == "done" for e in events)
 
 
 def test_run_stream_rejects_blank_prompt():

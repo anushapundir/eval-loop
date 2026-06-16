@@ -130,7 +130,11 @@ def run(request: RunRequest) -> RunResponse:
 
     try:
         graph = build_graph()
-        result = graph.invoke(AgentState(task=task, max_iterations=settings.max_iterations))
+        result = graph.invoke(AgentState(
+            task=task,
+            max_iterations=settings.max_iterations,
+            provider=request.provider,
+        ))
     except Exception as exc:  # noqa: BLE001 — surface any agent failure as 503, not 500.
         log.error("Agent run failed for task %s: %s", task.id, exc)
         raise HTTPException(
@@ -179,6 +183,15 @@ def _sse(event: dict) -> str:
     return f"data: {json.dumps(event)}\n\n"
 
 
+def _eval_payload(ev) -> dict:
+    """Per-criterion deterministic scores + overall/passed for an EvalResult."""
+    return {
+        "scores": [{"name": s.name, "score": s.score} for s in ev.deterministic],
+        "overall": ev.overall_score,
+        "passed": ev.passed,
+    }
+
+
 def _stage_event(node: str, delta: dict) -> dict:
     """Build the SSE stage event for one finished graph node.
 
@@ -193,17 +206,13 @@ def _stage_event(node: str, delta: dict) -> dict:
     elif node == "generate" and delta.get("v1") is not None:
         payload = {"text": delta["v1"].text}
     elif node == "evaluate_v1" and delta.get("v1_eval") is not None:
-        ev = delta["v1_eval"]
-        payload = {"scores": [{"name": s.name, "score": s.score} for s in ev.deterministic],
-                   "overall": ev.overall_score, "passed": ev.passed}
+        payload = _eval_payload(delta["v1_eval"])
     elif node == "feedback":
         payload = {"text": delta.get("feedback") or ""}
     elif node == "revise" and delta.get("v2") is not None:
         payload = {"text": delta["v2"].text}
     elif node in ("evaluate_v2", "carry_forward") and delta.get("v2_eval") is not None:
-        ev = delta["v2_eval"]
-        payload = {"scores": [{"name": s.name, "score": s.score} for s in ev.deterministic],
-                   "overall": ev.overall_score, "passed": ev.passed}
+        payload = _eval_payload(delta["v2_eval"])
         if node == "carry_forward":
             payload["reason"] = "v1 passed or revision budget exhausted"
     return {
@@ -254,23 +263,29 @@ def run_stream(request: RunRequest) -> StreamingResponse:
             yield _sse({"type": "error", "detail": "Agent produced an incomplete result."})
             return
 
-        if request.do_judge:
-            v1_eval = evaluate_response(v1, task, context, do_judge=True, settings=settings)
-            v2_eval = evaluate_response(v2, task, context, do_judge=True, settings=settings)
-            yield _sse({"type": "judged",
-                        "v1_overall": v1_eval.overall_score,
-                        "v2_overall": v2_eval.overall_score})
+        try:
+            if request.do_judge:
+                v1_eval = evaluate_response(v1, task, context, do_judge=True, settings=settings)
+                v2_eval = evaluate_response(v2, task, context, do_judge=True, settings=settings)
+                yield _sse({"type": "judged",
+                            "v1_overall": v1_eval.overall_score,
+                            "v2_overall": v2_eval.overall_score})
 
-        db.write_response(v1)
-        db.write_response(v2)
-        for trace in captured.get("traces", []):
-            db.write_trace(trace)
-        db.write_eval_result(v1_eval)
-        db.write_eval_result(v2_eval)
+            db.write_response(v1)
+            db.write_response(v2)
+            for trace in captured.get("traces", []):
+                db.write_trace(trace)
+            db.write_eval_result(v1_eval)
+            db.write_eval_result(v2_eval)
 
-        yield _sse({"type": "done",
-                    "revised": v2.text != v1.text,
-                    "improvement_delta": round(v2_eval.overall_score - v1_eval.overall_score, 3)})
+            delta_score = round(v2_eval.overall_score - v1_eval.overall_score, 3)
+            yield _sse({"type": "done",
+                        "revised": v2.text != v1.text,
+                        "improvement_delta": delta_score})
+        except Exception as exc:  # noqa: BLE001 - surface post-loop failures as an in-band error
+            log.error("Post-loop step failed for task %s: %s", task.id, exc)
+            yield _sse({"type": "error",
+                        "detail": "Post-processing failed (judge or storage error)."})
 
     return StreamingResponse(_generate(), media_type="text/event-stream")
 
