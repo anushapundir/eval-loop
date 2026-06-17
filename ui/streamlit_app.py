@@ -209,7 +209,10 @@ def _explorer_section(settings) -> None:
         st.info("No experiments yet. Run `python main.py evals --loop` (or `demo`) first.")
         return
 
-    labels = {f"{e.name} · N={e.n_tasks} · {e.id[:8]}": e for e in experiments}
+    labels = {
+        f"{e.name} · N={e.n_tasks} · {e.created_at:%Y-%m-%d %H:%M} · {e.id[:8]}": e
+        for e in experiments
+    }
     choice = st.selectbox("Experiment", list(labels.keys()))
     exp = labels[choice]
 
