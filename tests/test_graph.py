@@ -173,6 +173,27 @@ def test_graph_respects_max_iterations_zero(monkeypatch) -> None:
     assert state.v2 is not None and state.v2.text == state.v1.text
 
 
+def test_graph_strict_threshold_forces_revision(monkeypatch) -> None:
+    """A v1 that passes at a relaxed bar fails at a strict pass_threshold → revises."""
+    _patch_models(
+        monkeypatch,
+        context="alpha beta gamma delta epsilon",
+        v1_text="alpha beta gamma answer text padded to a decent length here",
+        v2_text="alpha beta gamma delta epsilon fully grounded improved answer",
+    )
+    task = Task(prompt="explain alpha", key_points=["alpha", "beta"])
+    compiled = graph_module.build_graph()
+
+    relaxed = AgentState(**compiled.invoke(AgentState(task=task, pass_threshold=0.5)))
+    strict = AgentState(**compiled.invoke(AgentState(task=task, pass_threshold=0.99)))
+
+    relaxed_steps = [t.step for t in relaxed.traces]
+    strict_steps = [t.step for t in strict.traces]
+    assert "carry_forward" in relaxed_steps and "revise" not in relaxed_steps
+    assert "revise" in strict_steps and "carry_forward" not in strict_steps
+    assert strict.v1_eval is not None and not strict.v1_eval.passed
+
+
 def test_generate_node_passes_provider_to_model(monkeypatch):
     """generate_node forwards AgentState.provider to the model layer."""
     from agents import graph as graph_mod

@@ -93,6 +93,36 @@ def test_run_rejects_blank_prompt() -> None:
     assert resp.status_code == 422
 
 
+def test_run_passes_key_points_and_threshold_into_state(monkeypatch) -> None:
+    """key_points and pass_threshold from the request reach the Task and AgentState."""
+    captured = {}
+
+    class _CapturingGraph:
+        def invoke(self, state):
+            captured["state"] = state
+            return _scripted_state(state.task)
+
+    monkeypatch.setattr(app_main, "build_graph", lambda: _CapturingGraph())
+    _stub_db_writes(monkeypatch)
+
+    client = TestClient(app)
+    resp = client.post("/run", json={
+        "prompt": "Why score each criterion separately?",
+        "key_points": ["where", "weak", "overall score"],
+        "pass_threshold": 0.9,
+    })
+    assert resp.status_code == 200
+    state = captured["state"]
+    assert state.task.key_points == ["where", "weak", "overall score"]
+    assert state.pass_threshold == 0.9
+
+
+def test_run_rejects_out_of_range_threshold() -> None:
+    client = TestClient(app)
+    resp = client.post("/run", json={"prompt": "q", "pass_threshold": 1.5})
+    assert resp.status_code == 422
+
+
 def test_run_returns_503_when_agent_fails(monkeypatch) -> None:
     class _BrokenGraph:
         def invoke(self, state):
@@ -265,7 +295,8 @@ def test_run_stream_judged_event_when_do_judge(monkeypatch):
         score = 0.8 if response.version.value == "v1" else 0.95
         return EvalResult(task_id=task.id, response_id=response.id, version=response.version,
                           deterministic=[CriterionScore(name="grounding", score=score)],
-                          judge=[CriterionScore(name="correctness", score=score)],
+                          judge=[CriterionScore(name="correctness", score=score,
+                                                justification=f"{response.version.value} note")],
                           overall_score=score, passed=True, judged=True)
 
     monkeypatch.setattr(app_main, "evaluate_response", _fake_eval)
@@ -276,8 +307,49 @@ def test_run_stream_judged_event_when_do_judge(monkeypatch):
     judged = next(e for e in events if e["type"] == "judged")
     assert judged["v1_overall"] == 0.8
     assert judged["v2_overall"] == 0.95
+    # The judge's per-criterion verdict (v1 vs v2 + justifications) is carried.
+    crit = next(c for c in judged["criteria"] if c["name"] == "correctness")
+    assert crit["v1"] == 0.8 and crit["v2"] == 0.95
+    assert crit["v1_justification"] == "v1 note" and crit["v2_justification"] == "v2 note"
     done = next(e for e in events if e["type"] == "done")
     assert round(done["improvement_delta"], 3) == 0.15
+
+
+def test_judged_event_pairs_criteria_with_justifications() -> None:
+    """_judged_event pairs each criterion's v1/v2 score and carries justifications."""
+    v1 = EvalResult(task_id="t", response_id="r1", version=ResponseVersion.V1,
+                    deterministic=[CriterionScore(name="grounding", score=0.5)],
+                    judge=[CriterionScore(name="correctness", score=0.6, justification="v1 shaky"),
+                           CriterionScore(name="clarity", score=0.8, justification="v1 ok")],
+                    overall_score=0.55, passed=False, judged=True)
+    v2 = EvalResult(task_id="t", response_id="r2", version=ResponseVersion.V2,
+                    deterministic=[CriterionScore(name="grounding", score=0.9)],
+                    judge=[CriterionScore(name="correctness", score=0.9, justification="v2 right"),
+                           CriterionScore(name="clarity", score=0.85, justification="v2 clear")],
+                    overall_score=0.9, passed=True, judged=True)
+
+    ev = app_main._judged_event(v1, v2)
+    assert ev["type"] == "judged"
+    assert ev["v1_overall"] == 0.55 and ev["v2_overall"] == 0.9
+    by_name = {c["name"]: c for c in ev["criteria"]}
+    assert set(by_name) == {"correctness", "clarity"}
+    assert by_name["correctness"]["v1"] == 0.6 and by_name["correctness"]["v2"] == 0.9
+    assert by_name["correctness"]["v1_justification"] == "v1 shaky"
+    assert by_name["correctness"]["v2_justification"] == "v2 right"
+
+
+def test_judged_event_handles_degraded_judge() -> None:
+    """When the judge degraded (empty judge lists), criteria is empty, not an error."""
+    v1 = EvalResult(task_id="t", response_id="r1", version=ResponseVersion.V1,
+                    deterministic=[CriterionScore(name="grounding", score=0.5)],
+                    overall_score=0.5, passed=False, judged=False)
+    v2 = EvalResult(task_id="t", response_id="r2", version=ResponseVersion.V2,
+                    deterministic=[CriterionScore(name="grounding", score=0.9)],
+                    overall_score=0.9, passed=True, judged=False)
+
+    ev = app_main._judged_event(v1, v2)
+    assert ev["criteria"] == []
+    assert ev["v1_overall"] == 0.5 and ev["v2_overall"] == 0.9
 
 
 def test_run_stream_error_event_when_judge_fails(monkeypatch):

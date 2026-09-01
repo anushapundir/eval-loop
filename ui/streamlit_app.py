@@ -63,6 +63,91 @@ _STAGE_LABELS = {
 }
 
 
+# Curated example tasks (real golden records) whose v1 answer typically misses a
+# key point, so at a strict quality bar the loop genuinely revises and improves —
+# the difference a free-form task can't reliably show. Ordered: default loads
+# ready to run. `key_points` mirror datasets/golden/golden.jsonl.
+EXAMPLE_TASKS: dict[str, dict | None] = {
+    "⭐ Why score each criterion separately? (revises)": {
+        "prompt": "Why score each criterion separately instead of one number?",
+        "key_points": ["where", "weak", "overall score"],
+    },
+    "How do metrics + feedback loops improve an agent? (revises)": {
+        "prompt": "How do evaluation metrics and feedback loops work together to improve an agent?",
+        "key_points": ["scores", "feedback", "improvement delta"],
+    },
+    "Custom task…": None,
+}
+_DEFAULT_EXAMPLE = next(iter(EXAMPLE_TASKS))
+
+
+def _render_judge_panel(event: dict) -> None:
+    """Render the LLM judge's per-criterion verdict (v1 vs v2) with justifications.
+
+    This is what the deterministic checks can't measure: subjective quality scored
+    against the rubric. Shown only when the judge ran (the 'judged' SSE event).
+    """
+    st.markdown("#### 🧑‍⚖️ LLM judge (Haiku) — subjective quality vs the rubric")
+    st.caption("Scores correctness · completeness · clarity against the rubric, using "
+               "the retrieved context — not a reference answer. This is the quality "
+               "the free deterministic checks cannot capture.")
+
+    criteria = event.get("criteria") or []
+    if not criteria:
+        st.caption(f"Judge overall: v1 {event['v1_overall']:.3f} → v2 "
+                   f"{event['v2_overall']:.3f} (per-criterion detail unavailable)")
+        return
+
+    rows = []
+    for c in criteria:
+        v1, v2 = c.get("v1"), c.get("v2")
+        delta = round(v2 - v1, 3) if (v1 is not None and v2 is not None) else None
+        rows.append({"criterion": c["name"], "v1": v1, "v2": v2, "Δ (v2−v1)": delta})
+    st.dataframe(rows, hide_index=True, use_container_width=True)
+    st.caption(f"Judge overall (blended into the score): v1 {event['v1_overall']:.3f} → "
+               f"v2 {event['v2_overall']:.3f}")
+
+    for c in criteria:
+        with st.expander(f"Judge's reasoning — {c['name']}"):
+            st.markdown(f"**v1:** {c.get('v1_justification') or '—'}")
+            st.markdown(f"**v2:** {c.get('v2_justification') or '—'}")
+
+
+def _render_comparison(v1_payload: dict, v2_payload: dict) -> None:
+    """Consolidated v1→v2 scoreboard for the deterministic checks + overall.
+
+    Puts every criterion's v1/v2/delta in one place so the specific gain the loop
+    made (typically coverage, when the critic names a missing key-point) is obvious
+    at a glance — the overall delta alone is small because two checks are always maxed.
+    """
+    st.markdown("#### 📊 v1 → v2 comparison (deterministic checks)")
+    v1s = {s["name"]: s["score"] for s in (v1_payload.get("scores") or [])}
+    v2s = {s["name"]: s["score"] for s in (v2_payload.get("scores") or [])}
+
+    rows = []
+    for name in (list(v1s) or list(v2s)):
+        a, b = v1s.get(name), v2s.get(name)
+        delta = round(b - a, 3) if (a is not None and b is not None) else None
+        rows.append({"criterion": name, "v1": a, "v2": b, "Δ (v2−v1)": delta})
+
+    o1, o2 = v1_payload.get("overall"), v2_payload.get("overall")
+    rows.append({
+        "criterion": "overall",
+        "v1": o1, "v2": o2,
+        "Δ (v2−v1)": round(o2 - o1, 3) if (o1 is not None and o2 is not None) else None,
+    })
+    st.dataframe(rows, hide_index=True, use_container_width=True)
+
+    gains = [(r["Δ (v2−v1)"], r["criterion"]) for r in rows
+             if r["criterion"] != "overall" and r["Δ (v2−v1)"] and r["Δ (v2−v1)"] > 0]
+    if gains:
+        best_delta, best_name = max(gains)
+        st.caption(f"Biggest gain: **{best_name}** ({best_delta:+.3f}) — the critic named "
+                   "this gap and the revision closed it.")
+    elif o1 is not None and o2 is not None and o2 == o1:
+        st.caption("v1 already cleared the bar, so it carried forward unchanged (delta 0).")
+
+
 def _stage_label(step: str, provider: str | None) -> tuple[str, str]:
     """Return (title, cost_chip) for a pipeline stage card."""
     if step in ("generate", "revise"):
@@ -90,13 +175,22 @@ def _render_stage_payload(step: str, payload: dict) -> None:
         st.info(payload.get("text") or "(no feedback)")
 
 
-def _stream_run(settings, prompt: str, provider: str, do_judge: bool) -> None:
+def _stream_run(settings, prompt: str, provider: str, do_judge: bool,
+                key_points: list[str], pass_threshold: float) -> None:
     """Open the SSE stream and render each pipeline stage as it arrives."""
     api = _api_base()
-    payload = {"prompt": prompt, "provider": provider, "do_judge": do_judge}
+    payload = {
+        "prompt": prompt,
+        "provider": provider,
+        "do_judge": do_judge,
+        "key_points": key_points,
+        "pass_threshold": pass_threshold,
+    }
     total_latency = 0.0
     paid_calls = 0
     stream_complete = False
+    v1_eval_payload: dict | None = None
+    v2_eval_payload: dict | None = None
 
     st.subheader("Pipeline (live)")
     try:
@@ -119,19 +213,25 @@ def _stream_run(settings, prompt: str, provider: str, do_judge: bool) -> None:
                     total_latency += lat
                     if cost == "PAID":
                         paid_calls += 1
+                    payload = event.get("payload", {})
+                    if event["step"] == "evaluate_v1":
+                        v1_eval_payload = payload
+                    elif event["step"] in ("evaluate_v2", "carry_forward"):
+                        v2_eval_payload = payload
                     with st.status(f"{title} · {lat:.0f} ms · {cost}",
                                    state="complete", expanded=False):
-                        _render_stage_payload(event["step"], event.get("payload", {}))
+                        _render_stage_payload(event["step"], payload)
                 elif kind == "judged":
                     paid_calls += 2
-                    st.caption(f"Judged (Haiku): v1 {event['v1_overall']:.3f} → "
-                               f"v2 {event['v2_overall']:.3f}")
+                    _render_judge_panel(event)
                 elif kind == "done":
                     stream_complete = True
                     st.success(
                         f"Done · delta (v2−v1) {event['improvement_delta']:+.3f} · "
                         f"{'revised' if event['revised'] else 'carried forward unchanged'}"
                     )
+                    if v1_eval_payload is not None and v2_eval_payload is not None:
+                        _render_comparison(v1_eval_payload, v2_eval_payload)
                     st.caption(f"Total stage latency ≈ {total_latency:.0f} ms · "
                                f"paid model calls: {paid_calls}")
                 elif kind == "error":
@@ -147,21 +247,50 @@ def _stream_run(settings, prompt: str, provider: str, do_judge: bool) -> None:
         st.error(f"Stream failed: {exc}")
 
 
+def _on_example_change() -> None:
+    """Sync the task text box to the picked example (callback runs before rerender)."""
+    example = EXAMPLE_TASKS[st.session_state.example_choice]
+    if example is not None:
+        st.session_state.task_prompt = example["prompt"]
+
+
 def _run_section(settings) -> None:
     """The interactive 'Run a task' form (live mode only) → streaming /run/stream."""
     st.subheader("Run the self-improvement loop")
     st.caption("Submit a task → watch the agent retrieve, generate v1, critique, "
                "and revise to v2 — stage by stage, in real time.")
 
+    # Seed session state so the page loads with the default example ready to run.
+    if "example_choice" not in st.session_state:
+        st.session_state.example_choice = _DEFAULT_EXAMPLE
+    if "task_prompt" not in st.session_state:
+        seed = EXAMPLE_TASKS[_DEFAULT_EXAMPLE]
+        st.session_state.task_prompt = seed["prompt"] if seed else ""
+
+    st.selectbox(
+        "Example task", list(EXAMPLE_TASKS), key="example_choice",
+        on_change=_on_example_change,
+        help="Example tasks carry required key-points, so at a strict quality bar "
+             "the loop actually revises. Pick “Custom task…” to type your own.",
+    )
+    example = EXAMPLE_TASKS[st.session_state.example_choice]
+
     with st.form("run_form"):
-        prompt = st.text_area(
-            "Task", placeholder="e.g. What is LLM-as-a-judge and why validate it?", height=120
-        )
-        provider_label = st.selectbox(
+        prompt = st.text_area("Task", key="task_prompt", height=120)
+        col1, col2 = st.columns(2)
+        provider_label = col1.selectbox(
             "Model", ["Local · qwen2.5:7b (free)", "Claude Haiku 4.5 (paid — uses API budget)"]
         )
-        do_judge = st.checkbox("Also run the Haiku judge after the loop (costs API budget)",
-                               value=False)
+        pass_threshold = col2.slider(
+            "Quality bar (pass threshold)", 0.50, 1.00, 0.80, 0.05,
+            help="Answers scoring below this get critiqued and revised. 0.80 sits "
+                 "between a typical v1 and v2, so the example tasks fail v1, get "
+                 "revised, and v2 clears the bar. (Grounding is a word-overlap proxy, "
+                 "so realistic answers rarely exceed ~0.85 — 0.90 is effectively "
+                 "unreachable.)",
+        )
+        do_judge = st.checkbox("Also run the Haiku judge after the loop "
+                               "(costs API budget; shows the judge panel)", value=False)
         submitted = st.form_submit_button("Run", type="primary")
 
     if not submitted:
@@ -170,8 +299,20 @@ def _run_section(settings) -> None:
         st.warning("Please enter a task.")
         return
 
+    # Key-points only apply to the *unedited* example prompt. If the task text was
+    # retyped, run it as a plain custom task — otherwise we'd score the new answer
+    # against key-points from a different question (a confusing false failure).
+    is_example = example is not None and prompt.strip() == example["prompt"]
+    key_points = example["key_points"] if is_example else []
+    if is_example:
+        st.caption("✓ Example task — the coverage check looks for these key-points: "
+                   + ", ".join(f"`{k}`" for k in key_points))
+    elif example is not None:
+        st.info("You edited the example text, so this runs as a **custom task** — no "
+                "key-point coverage check (pick “Custom task…” to hide this notice).")
+
     provider = "haiku" if provider_label.startswith("Claude") else "ollama"
-    _stream_run(settings, prompt, provider, do_judge)
+    _stream_run(settings, prompt, provider, do_judge, key_points, pass_threshold)
 
 
 def _load_experiments(settings) -> list[Experiment]:

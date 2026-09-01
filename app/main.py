@@ -57,6 +57,18 @@ class RunRequest(BaseModel):
         default=None,
         description="Per-run model override; None uses the configured default.",
     )
+    key_points: list[str] = Field(
+        default_factory=list,
+        description="Required points for the coverage check; a missing point is "
+        "what makes v1 fail and drives the revise loop (used by example tasks).",
+    )
+    pass_threshold: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Per-run quality bar; None uses the configured default. A "
+        "stricter bar makes a borderline v1 fail so the loop revises.",
+    )
 
     @field_validator("prompt")
     @classmethod
@@ -125,7 +137,7 @@ def run(request: RunRequest) -> RunResponse:
     the loop — CLAUDE.md §2/§7).
     """
     settings = get_settings()
-    task = Task(prompt=request.prompt, source="user")
+    task = Task(prompt=request.prompt, source="user", key_points=request.key_points)
     db.write_task(task)
 
     try:
@@ -134,6 +146,7 @@ def run(request: RunRequest) -> RunResponse:
             task=task,
             max_iterations=settings.max_iterations,
             provider=request.provider,
+            pass_threshold=request.pass_threshold,
         ))
     except Exception as exc:  # noqa: BLE001 — surface any agent failure as 503, not 500.
         log.error("Agent run failed for task %s: %s", task.id, exc)
@@ -192,6 +205,33 @@ def _eval_payload(ev) -> dict:
     }
 
 
+def _judged_event(v1_eval: EvalResult, v2_eval: EvalResult) -> dict:
+    """Build the SSE 'judged' event: the judge's per-criterion verdict, v1 vs v2.
+
+    Pairs each rubric criterion's v1 and v2 score and carries the judge's written
+    justification, so the UI can show *what* the judge concluded — not just the
+    blended overall. Falls back gracefully if the judge degraded (empty lists).
+    """
+    v1_by_name = {s.name: s for s in v1_eval.judge}
+    v2_by_name = {s.name: s for s in v2_eval.judge}
+    criteria = [
+        {
+            "name": name,
+            "v1": v1_by_name[name].score if name in v1_by_name else None,
+            "v2": v2_by_name[name].score if name in v2_by_name else None,
+            "v1_justification": (v1_by_name[name].justification if name in v1_by_name else None),
+            "v2_justification": (v2_by_name[name].justification if name in v2_by_name else None),
+        }
+        for name in (list(v1_by_name) or list(v2_by_name))
+    ]
+    return {
+        "type": "judged",
+        "v1_overall": v1_eval.overall_score,
+        "v2_overall": v2_eval.overall_score,
+        "criteria": criteria,
+    }
+
+
 def _stage_event(node: str, delta: dict) -> dict:
     """Build the SSE stage event for one finished graph node.
 
@@ -234,7 +274,7 @@ def run_stream(request: RunRequest) -> StreamingResponse:
     shows a clean message rather than a hung stream.
     """
     settings = get_settings()
-    task = Task(prompt=request.prompt, source="user")
+    task = Task(prompt=request.prompt, source="user", key_points=request.key_points)
 
     def _generate():
         captured: dict = {}
@@ -242,7 +282,10 @@ def run_stream(request: RunRequest) -> StreamingResponse:
             db.write_task(task)
             graph = build_graph()
             state = AgentState(
-                task=task, max_iterations=settings.max_iterations, provider=request.provider
+                task=task,
+                max_iterations=settings.max_iterations,
+                provider=request.provider,
+                pass_threshold=request.pass_threshold,
             )
             for update in graph.stream(state, stream_mode="updates"):
                 for node, delta in update.items():
@@ -267,9 +310,7 @@ def run_stream(request: RunRequest) -> StreamingResponse:
             if request.do_judge:
                 v1_eval = evaluate_response(v1, task, context, do_judge=True, settings=settings)
                 v2_eval = evaluate_response(v2, task, context, do_judge=True, settings=settings)
-                yield _sse({"type": "judged",
-                            "v1_overall": v1_eval.overall_score,
-                            "v2_overall": v2_eval.overall_score})
+                yield _sse(_judged_event(v1_eval, v2_eval))
 
             db.write_response(v1)
             db.write_response(v2)

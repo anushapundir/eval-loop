@@ -33,6 +33,11 @@ class AgentState(BaseModel):
     # configured default provider. Threaded into the generate/revise model calls.
     provider: Literal["ollama", "haiku"] | None = None
 
+    # Optional per-run quality bar; None → use settings.pass_threshold. A stricter
+    # bar makes a borderline v1 fail, which is what drives the revise loop to
+    # engage (otherwise good answers always pass and carry forward unchanged).
+    pass_threshold: float | None = None
+
     iteration: int = 0
     max_iterations: int = 2
 

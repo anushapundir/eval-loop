@@ -34,18 +34,27 @@ log = get_logger(__name__)
 
 
 def _deterministic_eval(response: AgentResponse, state: AgentState) -> EvalResult:
-    """Score a response with the free deterministic suite (no judge in the loop)."""
+    """Score a response with the free deterministic suite (no judge in the loop).
+
+    The pass bar is the per-run ``state.pass_threshold`` when set, else the
+    configured default — a stricter bar is what makes a borderline v1 fail and
+    drives the revise loop to engage.
+    """
     scores = run_deterministic_checks(
         response.text, context=state.context, key_points=state.task.key_points
     )
     overall = round(sum(s.score for s in scores) / len(scores), 3)
+    threshold = (
+        state.pass_threshold if state.pass_threshold is not None
+        else get_settings().pass_threshold
+    )
     return EvalResult(
         task_id=state.task.id,
         response_id=response.id,
         version=response.version,
         deterministic=scores,
         overall_score=overall,
-        passed=overall >= get_settings().pass_threshold,
+        passed=overall >= threshold,
     )
 
 
