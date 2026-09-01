@@ -395,8 +395,8 @@ def main() -> None:
     settings = get_settings()
     demo = _is_demo_mode()
 
-    st.set_page_config(page_title="eval-loop-agent", layout="wide")
-    st.title("eval-loop-agent")
+    st.set_page_config(page_title="eval-loop", layout="wide")
+    st.title("eval-loop")
     st.caption("A self-improving agent with an evaluation-driven feedback loop. "
                "Offline eval on synthetic + golden data; model weights are frozen "
                "(program optimization, not retraining). Trends are directional at small N.")

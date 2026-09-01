@@ -1,5 +1,5 @@
 [project]
-name = "eval-loop-agent"
+name = "eval-loop"
 version = "0.1.0"
 description = "A self-improving agent with an evaluation-driven feedback loop."
 readme = "README.md"

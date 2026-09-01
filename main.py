@@ -1,4 +1,4 @@
-"""CLI entry point for eval-loop-agent.
+"""CLI entry point for eval-loop.
 
 Day 1 commands:
 
@@ -484,7 +484,7 @@ def _run_demo_split(
 
 def build_parser() -> argparse.ArgumentParser:
     """Build the CLI argument parser."""
-    parser = argparse.ArgumentParser(prog="eval-loop-agent", description=__doc__)
+    parser = argparse.ArgumentParser(prog="eval-loop", description=__doc__)
     parser.add_argument("--hello", action="store_true", help="One local Ollama completion.")
     sub = parser.add_subparsers(dest="command")
 

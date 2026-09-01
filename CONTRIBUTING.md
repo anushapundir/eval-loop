@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for your interest in `eval-loop-agent`. This is a small, focused project;
+Thanks for your interest in `eval-loop`. This is a small, focused project;
 contributions that keep it small and focused are the most welcome.
 
 ## Setup
