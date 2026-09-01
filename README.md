@@ -1,4 +1,4 @@
-# eval-loop-agent
+# eval-loop
 
 An AI agent that improves its own answers through a closed evaluation loop.
 
@@ -28,8 +28,8 @@ ollama pull qwen2.5:7b
 **Install:**
 
 ```bash
-git clone https://github.com/anushapundir/eval-loop-agent.git
-cd eval-loop-agent
+git clone https://github.com/anushapundir/eval-loop.git
+cd eval-loop
 
 python -m venv .venv
 .venv\Scripts\activate        # Windows

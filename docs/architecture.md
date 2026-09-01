@@ -1,4 +1,4 @@
-# Architecture — `eval-loop-agent`
+# Architecture — `eval-loop`
 
 A self-improving agent with an evaluation-driven feedback loop. Given a task, the
 agent retrieves grounding context, generates an answer, scores it, critiques

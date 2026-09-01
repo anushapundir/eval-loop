@@ -114,7 +114,7 @@ async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(
-    title="eval-loop-agent",
+    title="eval-loop",
     summary="Self-improving agent with an evaluation-driven feedback loop.",
     lifespan=_lifespan,
 )

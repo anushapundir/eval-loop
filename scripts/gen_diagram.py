@@ -161,7 +161,7 @@ def render(out_path: Path = OUT_PATH) -> Path:
     ax_graph.set_ylim(0, 10.0)
     ax_graph.axis("off")
 
-    fig.suptitle("eval-loop-agent — architecture", fontsize=15, fontweight="bold")
+    fig.suptitle("eval-loop — architecture", fontsize=15, fontweight="bold")
     fig.tight_layout(rect=(0, 0, 1, 0.97))
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
